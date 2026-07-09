@@ -59,9 +59,17 @@ curl -X POST http://localhost:8000/api/meetings/{id}/retry
     → [任务4接入] LLM 摘要 → Word 导出
 ```
 
-- ASR provider 可替换（`ASR_PROVIDER` 环境变量），当前内置 `mock`
-  （确定性剧本，用于本地开发与联调）；云 provider 在
-  `app/services/asr/__init__.py` 注册即可接入
+- ASR provider 可替换（`ASR_PROVIDER` 环境变量）：
+  - `mock`（默认）：确定性剧本，用于本地开发与联调
+  - `funasr`：本地推理（Paraformer-zh 转写 + CAM++ 说话人分离/声纹），
+    数据不出域。安装可选依赖后启用：
+    ```bash
+    uv sync --extra funasr        # 依赖较重（torch 等）
+    ASR_PROVIDER=funasr uv run uvicorn app.main:app
+    ```
+    首次运行自动从 ModelScope 下载模型（约 1-2GB）；CPU 可推理，
+    长音频耗时较长。支持热词注入（provider 接口 hotwords 参数）
+  - 云 provider（阿里云/腾讯云等）在 `app/services/asr/__init__.py` 注册即可接入
 - 存储层抽象（`app/services/storage.py`）：MVP 本地磁盘，二期换对象存储
   预签名直传时管道不变
 
