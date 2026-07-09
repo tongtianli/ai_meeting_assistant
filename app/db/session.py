@@ -5,10 +5,13 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 
-engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+# NullPool：asyncpg 连接绑定事件循环，不跨请求池化，
+# 避免 BackgroundTasks/测试场景下跨 loop 复用失效连接；MVP 流量下开销可忽略
+engine = create_async_engine(settings.database_url, poolclass=NullPool)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 

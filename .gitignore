@@ -25,3 +25,6 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# 本地音频与中间产物
+data/
