@@ -12,6 +12,7 @@ dependencies = [
     "pgvector>=0.3",
     "pydantic-settings>=2.3",
     "python-multipart>=0.0.32",
+    "pyjwt>=2.13.0",
 ]
 
 [project.optional-dependencies]

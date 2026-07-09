@@ -32,3 +32,12 @@ def db_available() -> bool:
 
 
 requires_db = pytest.mark.skipif(not db_available(), reason="database not reachable")
+
+
+def auth_headers(client) -> dict[str, str]:
+    """用访问口令换 JWT，返回带 Bearer 的请求头。"""
+    from app.core.config import settings
+
+    resp = client.post("/api/auth/token", json={"password": settings.auth_password})
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}

@@ -37,18 +37,41 @@ uv run pytest
 ## API 速览
 
 ```bash
-# 健康检查
+# 健康检查（无需鉴权）
 curl http://localhost:8000/api/health
 
+# 换取 Bearer Token（MVP 单默认用户，口令见 .env 的 AUTH_PASSWORD）
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/token \
+  -H 'Content-Type: application/json' -d '{"password":"dev-password"}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+AUTH="Authorization: Bearer $TOKEN"
+
 # 上传录音并触发处理管道（mp3/wav/m4a/mp4）
-curl -X POST http://localhost:8000/api/meetings \
+curl -X POST http://localhost:8000/api/meetings -H "$AUTH" \
   -F "file=@meeting.mp3" -F "title=项目周会"
 
+# 会议列表
+curl -H "$AUTH" http://localhost:8000/api/meetings
+
 # 查询处理状态（uploaded → transcoding → transcribing → done/failed）
-curl http://localhost:8000/api/meetings/{id}
+curl -H "$AUTH" http://localhost:8000/api/meetings/{id}
+
+# 完整转录（segments 入库即可用，不依赖摘要阶段）
+curl -H "$AUTH" http://localhost:8000/api/meetings/{id}/segments
+
+# 原文下载（纯文本，带时间戳与说话人真名）
+curl -H "$AUTH" -O http://localhost:8000/api/meetings/{id}/transcript
+
+# Speaker 重命名（写 SpeakerBinding，追加式可审计；person_id 立即物化）
+curl -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  http://localhost:8000/api/meetings/{id}/speaker-bindings \
+  -d '{"speaker_label":"speaker_001","name":"Tim"}'
+
+# 换发音频短时签名播放 URL（支持 range，audio 标签直接可用）
+curl -H "$AUTH" http://localhost:8000/api/meetings/{id}/audio-url
 
 # 失败后重试（各阶段幂等）
-curl -X POST http://localhost:8000/api/meetings/{id}/retry
+curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
 ```
 
 ## 处理管道（PRD §2）
