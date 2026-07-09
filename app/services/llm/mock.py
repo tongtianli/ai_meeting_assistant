@@ -18,7 +18,8 @@ _SUMMARY_JSON = {
             "task": "完成上传接口的开发",
             "owner": "speaker_001",
             "deadline": "周五",
-            "source_segment_seq": 3,
+            # 引用 seq=4（"那这项任务记给我"，speaker_001 认领）——与 mock ASR 剧本自洽
+            "source_segment_seq": 4,
         }
     ],
 }

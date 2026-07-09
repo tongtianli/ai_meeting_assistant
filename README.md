@@ -73,6 +73,9 @@ curl -H "$AUTH" http://localhost:8000/api/meetings/{id}/audio-url
 # 结构化会议纪要（最新版本；含总结/讨论/决策/TODO 与 segment 溯源）
 curl -H "$AUTH" http://localhost:8000/api/meetings/{id}/summary
 
+# Word 导出（docxtpl 实时渲染；重命名 Speaker 后导出立即用真名）
+curl -H "$AUTH" -O -J http://localhost:8000/api/meetings/{id}/export.docx
+
 # 失败后重试（各阶段幂等）
 curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
 ```
@@ -83,7 +86,7 @@ curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
 上传 → 转码归一化(ffmpeg 16kHz mono wav) → ASR(转写+说话人分离+对齐)
     → segments 入库 + speaker embedding 留存(voice_samples 暗桩)
     → LLM 摘要(map-reduce → 结构化 JSON → Summary/ActionItem 入库)
-    → [任务5接入] Word 导出
+    → Word 导出(docxtpl 模板实时渲染，用户点击时生成，不占管道)
 ```
 
 - ASR provider 可替换（`ASR_PROVIDER` 环境变量）：
@@ -118,8 +121,12 @@ app/
   models/            # SQLAlchemy 模型（PRD §5 全部 10 张表，含二期暗桩字段）
   schemas/           # API 出入参（pydantic）
   api/routes/        # 路由（health / meetings）
+  templates/         # Word 纪要模板（docxtpl；换公司模板直接替换 docx）
   services/
     storage.py       # 音频存储抽象（本地磁盘实现）
+    word_export.py   # Summary JSON → Word（docxtpl 渲染）
+    llm/             # LLM Router（Gemini/GLM/mock）+ prompt 管理
+    summarize.py     # map-reduce 摘要 + schema 校验 + 降级
     transcode.py     # ffmpeg 转码归一化
     asr/             # ASR provider 接口 + mock 实现
     pipeline.py      # 异步处理管道（状态机 + 阶段幂等重试）

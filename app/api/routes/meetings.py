@@ -10,13 +10,13 @@ from fastapi import (
     HTTPException,
     UploadFile,
 )
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_audio_token, require_user
 from app.db.session import get_db
-from app.models import ActionItem, Meeting, MeetingStatus, Summary, TranscriptSegment
+from app.models import ActionItem, Meeting, MeetingStatus, Person, Summary, TranscriptSegment
 from app.schemas.summary import SummaryOut
 from app.schemas.meeting import (
     AudioUrlOut,
@@ -33,6 +33,7 @@ from app.services.speakers import (
     bind_speaker,
 )
 from app.services.storage import get_audio_storage
+from app.services.word_export import build_context, render_summary_docx
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -249,3 +250,42 @@ async def get_summary(
     if summary is None:
         raise HTTPException(status_code=404, detail="summary not ready")
     return summary
+
+
+_DOCX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+
+
+@router.get("/{meeting_id}/export.docx")
+async def export_word(
+    meeting_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: UUID = Depends(require_user),
+) -> Response:
+    """Word 导出：最新版纪要实时渲染（PRD Feature 6，纯程序步骤）。"""
+    await _get_meeting_or_404(db, meeting_id)
+    summary = await db.scalar(
+        select(Summary)
+        .where(Summary.meeting_id == meeting_id)
+        .order_by(Summary.version.desc())
+        .limit(1)
+    )
+    if summary is None:
+        raise HTTPException(status_code=404, detail="summary not ready")
+    rows = await db.execute(
+        select(ActionItem, TranscriptSegment.start_time, Person.name)
+        .outerjoin(
+            TranscriptSegment, TranscriptSegment.id == ActionItem.source_segment_id
+        )
+        .outerjoin(Person, Person.id == TranscriptSegment.person_id)
+        .where(ActionItem.meeting_id == meeting_id)
+    )
+    content = build_context(summary.content_json, list(rows))
+    payload = render_summary_docx(content)
+    filename = f"minutes-{meeting_id}-v{summary.version}.docx"
+    return Response(
+        payload,
+        media_type=_DOCX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
