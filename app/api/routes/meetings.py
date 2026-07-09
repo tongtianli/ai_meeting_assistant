@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_audio_token, require_user
 from app.db.session import get_db
-from app.models import Meeting, MeetingStatus, TranscriptSegment
+from app.models import ActionItem, Meeting, MeetingStatus, Summary, TranscriptSegment
+from app.schemas.summary import SummaryOut
 from app.schemas.meeting import (
     AudioUrlOut,
     MeetingOut,
@@ -229,3 +230,22 @@ async def rename_speaker(
         confirmed_by=binding.confirmed_by,
         confidence=binding.confidence,
     )
+
+
+@router.get("/{meeting_id}/summary", response_model=SummaryOut)
+async def get_summary(
+    meeting_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _: UUID = Depends(require_user),
+) -> Summary:
+    """最新版本的结构化纪要（Summary 版本化，PRD Feature 6）。"""
+    await _get_meeting_or_404(db, meeting_id)
+    summary = await db.scalar(
+        select(Summary)
+        .where(Summary.meeting_id == meeting_id)
+        .order_by(Summary.version.desc())
+        .limit(1)
+    )
+    if summary is None:
+        raise HTTPException(status_code=404, detail="summary not ready")
+    return summary

@@ -4,7 +4,6 @@
 - 任一阶段失败置 failed + error_message；重试从头执行但各阶段幂等
   （已转码的中间产物直接复用，segments/voice_samples 先清后写）
 - MVP 由 FastAPI BackgroundTasks 驱动；二期换 Celery 时阶段划分不变（PRD §4）
-- LLM 总结阶段（任务 4）接入后插到 transcribe 之后：summarizing → done
 """
 import logging
 import wave
@@ -18,6 +17,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Meeting, MeetingStatus, TranscriptSegment, VoiceSample
 from app.services.asr import get_asr_provider
+from app.services.summarize import summarize_meeting
 from app.services.storage import get_audio_storage
 from app.services.transcode import transcode_to_wav16k_mono
 
@@ -33,6 +33,7 @@ async def run_pipeline(meeting_id: UUID) -> None:
         try:
             wav_path = await _stage_transcode(session, meeting)
             await _stage_transcribe(session, meeting, wav_path)
+            await _stage_summarize(session, meeting)
         except Exception as exc:
             logger.exception("pipeline failed for meeting %s", meeting_id)
             await session.rollback()
@@ -100,3 +101,8 @@ async def _stage_transcribe(
         for e in result.speaker_embeddings
     )
     await session.commit()
+
+
+async def _stage_summarize(session: AsyncSession, meeting: Meeting) -> None:
+    await _set_status(session, meeting, MeetingStatus.summarizing)
+    await summarize_meeting(session, meeting)

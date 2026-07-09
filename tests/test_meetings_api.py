@@ -52,6 +52,13 @@ def test_upload_runs_pipeline_to_done(tmp_path, monkeypatch) -> None:
         resp = client.get("/api/meetings", headers=headers)
         assert meeting_id in [m["id"] for m in resp.json()]
 
+        # 摘要已生成（mock LLM）
+        resp = client.get(f"/api/meetings/{meeting_id}/summary", headers=headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["version"] == 1
+        assert body["content_json"]["title"]
+
 
 def test_upload_rejects_unsupported_format(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "data_dir", tmp_path)

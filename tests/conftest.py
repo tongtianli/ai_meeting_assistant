@@ -41,3 +41,11 @@ def auth_headers(client) -> dict[str, str]:
     resp = client.post("/api/auth/token", json={"password": settings.auth_password})
     assert resp.status_code == 200, resp.text
     return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+@pytest.fixture(autouse=True)
+def _mock_llm(monkeypatch):
+    """测试环境统一走 mock LLM provider，避免真实网络调用。"""
+    from app.core.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "llm_providers", "mock")

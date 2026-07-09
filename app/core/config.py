@@ -22,5 +22,14 @@ class Settings(BaseSettings):
     # 音频播放短时签名 URL 有效期（秒）
     audio_url_ttl_seconds: int = 600
 
+    # LLM Router（PRD §4：统一 service 抽象；按序尝试，失败降级到下一个）
+    llm_providers: str = "gemini,glm"  # 逗号分隔优先级；测试/无 key 联调可用 "mock"
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    gemini_model: str = "gemini-2.5-flash"
+    glm_api_key: str = ""
+    glm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    glm_model: str = "glm-4-flash"
+
 
 settings = Settings()

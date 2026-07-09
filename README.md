@@ -70,6 +70,9 @@ curl -X POST -H "$AUTH" -H 'Content-Type: application/json' \
 # 换发音频短时签名播放 URL（支持 range，audio 标签直接可用）
 curl -H "$AUTH" http://localhost:8000/api/meetings/{id}/audio-url
 
+# 结构化会议纪要（最新版本；含总结/讨论/决策/TODO 与 segment 溯源）
+curl -H "$AUTH" http://localhost:8000/api/meetings/{id}/summary
+
 # 失败后重试（各阶段幂等）
 curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
 ```
@@ -79,7 +82,8 @@ curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
 ```
 上传 → 转码归一化(ffmpeg 16kHz mono wav) → ASR(转写+说话人分离+对齐)
     → segments 入库 + speaker embedding 留存(voice_samples 暗桩)
-    → [任务4接入] LLM 摘要 → Word 导出
+    → LLM 摘要(map-reduce → 结构化 JSON → Summary/ActionItem 入库)
+    → [任务5接入] Word 导出
 ```
 
 - ASR provider 可替换（`ASR_PROVIDER` 环境变量）：
@@ -93,6 +97,14 @@ curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
     首次运行自动从 ModelScope 下载模型（约 1-2GB）；CPU 可推理，
     长音频耗时较长。支持热词注入（provider 接口 hotwords 参数）
   - 云 provider（阿里云/腾讯云等）在 `app/services/asr/__init__.py` 注册即可接入
+- LLM Router（`LLM_PROVIDERS` 环境变量，逗号分隔优先级）：
+  - `gemini`（默认主力，Gemini Flash）+ `glm`（GLM Flash 中文兜底），
+    两家都走 OpenAI 兼容端点，一份实现两组配置；分别需要
+    `GEMINI_API_KEY` / `GLM_API_KEY`
+  - `mock`：无 key 联调用，输出确定性纪要 JSON
+  - 传输错误/限流自动降级到下一个 provider；JSON schema 校验失败带错误
+    反馈重试；全部失败时降级为纯文本纪要（`_meta.degraded=true`）
+  - 注意：Gemini 免费档数据可能被用于训练，真实敏感会议建议付费档
 - 存储层抽象（`app/services/storage.py`）：MVP 本地磁盘，二期换对象存储
   预签名直传时管道不变
 
