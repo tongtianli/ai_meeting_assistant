@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/api/client.ts","./src/api/meetings.ts","./src/api/types.ts","./src/components/StatusBadge.tsx","./src/components/SummaryView.tsx","./src/components/TranscriptView.tsx","./src/pages/HomePage.tsx","./src/pages/LoginPage.tsx","./src/pages/MeetingDetailPage.tsx"],"version":"5.9.3"}

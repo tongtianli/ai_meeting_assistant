@@ -1,0 +1,54 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #f5f6f8;
+  color: #1f2329;
+}
+.container { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
+.topbar {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 24px;
+}
+h1 { font-size: 22px; margin: 0; }
+.card {
+  background: #fff; border-radius: 8px; padding: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 16px;
+}
+button {
+  background: #2b6de3; color: #fff; border: none; border-radius: 6px;
+  padding: 8px 16px; font-size: 14px; cursor: pointer;
+}
+button:disabled { background: #a8bce0; cursor: not-allowed; }
+button.secondary { background: #eef1f5; color: #1f2329; }
+input[type="text"], input[type="password"] {
+  padding: 8px 10px; border: 1px solid #d5dae1; border-radius: 6px;
+  font-size: 14px; width: 100%;
+}
+.form-row { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; }
+.error { color: #d33; font-size: 13px; margin: 8px 0; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #eef1f5; font-size: 14px; }
+a { color: #2b6de3; text-decoration: none; }
+.badge {
+  display: inline-block; padding: 2px 10px; border-radius: 999px;
+  font-size: 12px; background: #eef1f5;
+}
+.badge.done { background: #e3f5e9; color: #1a7f37; }
+.badge.failed { background: #fde8e8; color: #c0392b; }
+.badge.processing { background: #fff4e0; color: #b7791f; }
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.tabs button.active { background: #2b6de3; color: #fff; }
+.tabs button { background: #eef1f5; color: #1f2329; }
+.segment {
+  display: flex; gap: 10px; padding: 8px; border-radius: 6px;
+  cursor: pointer; font-size: 14px; line-height: 1.6;
+}
+.segment:hover { background: #f0f4fb; }
+.segment.current { background: #e3edfd; }
+.segment .time { color: #8a919c; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.segment .speaker { color: #2b6de3; white-space: nowrap; cursor: pointer; font-weight: 500; }
+.audio-bar { position: sticky; top: 0; background: #fff; padding: 12px 0; z-index: 5; }
+audio { width: 100%; }
+.todo-source { color: #2b6de3; cursor: pointer; }
+.muted { color: #8a919c; font-size: 13px; }

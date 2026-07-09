@@ -28,3 +28,7 @@ htmlcov/
 
 # 本地音频与中间产物
 data/
+
+# 前端
+web/node_modules/
+web/dist/

@@ -13,6 +13,7 @@
 ## 本地开发
 
 ```bash
+# —— 后端 ——
 # 0. 前置依赖：ffmpeg（macOS: brew install ffmpeg / Ubuntu: apt install ffmpeg）
 
 # 1. 启动数据库（pgvector PostgreSQL）
@@ -32,6 +33,12 @@ uv run uvicorn app.main:app --reload
 
 # 6. 运行测试（需要数据库在跑，DB 相关用例会在无库时自动跳过）
 uv run pytest
+
+# —— 前端（web/）——
+cd web
+npm install
+npm run dev      # 开发：vite dev server，/api 代理到 :8000
+npm run build    # 生产：构建到 web/dist，FastAPI 检测到后自动同源托管
 ```
 
 ## API 速览
@@ -114,6 +121,10 @@ curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
 ## 项目结构
 
 ```
+web/                 # React + Vite + TS 前端（登录/上传/列表/详情）
+  src/api/           # API client 层（逻辑与视图分离，为跨端复用铺路）
+  src/pages/         # LoginPage / HomePage / MeetingDetailPage
+  src/components/    # 转录视图（点击跳播/重命名）、纪要视图（TODO 溯源）等
 app/
   main.py            # FastAPI 入口
   core/config.py     # 环境变量配置（pydantic-settings）
