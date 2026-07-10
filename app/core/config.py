@@ -18,6 +18,20 @@ class Settings(BaseSettings):
     transcode_filters: str = "highpass=f=80,afftdn,loudnorm=I=-16:TP=-1.5:LRA=11"
     # FunASR VAD 语音/噪音判定阈值，越低越不容易丢弃小音量语音（官方默认 0.6）
     funasr_speech_noise_thres: float = 0.5
+    # FunASR 主识别模型：paraformer-zh（快）或 FunAudioLLM/Fun-ASR-Nano-2512
+    # （LLM-based，识别力更强、CPU 更慢；VAD/标点/声纹模型不随之变化）
+    funasr_model: str = "paraformer-zh"
+
+    # 通义听悟（云 ASR，会议场景；需先上传 OSS 供听悟拉取）
+    aliyun_access_key_id: str = ""
+    aliyun_access_key_secret: str = ""
+    tingwu_app_key: str = ""
+    tingwu_region: str = "cn-beijing"
+    oss_endpoint: str = ""  # 如 https://oss-cn-beijing.aliyuncs.com
+    oss_bucket: str = ""
+    oss_prefix: str = "meeting-audio/"
+    tingwu_poll_interval_seconds: float = 10.0
+    tingwu_timeout_seconds: float = 3600.0
 
     # 鉴权（PRD §9.2：全站 Bearer Token JWT，MVP 单默认用户）
     # HS256 密钥需 ≥32 字节；生产环境必须通过环境变量覆盖

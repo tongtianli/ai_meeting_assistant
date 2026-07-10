@@ -98,14 +98,26 @@ curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
 
 - ASR provider 可替换（`ASR_PROVIDER` 环境变量）：
   - `mock`（默认）：确定性剧本，用于本地开发与联调
-  - `funasr`：本地推理（Paraformer-zh 转写 + CAM++ 说话人分离/声纹），
-    数据不出域。安装可选依赖后启用：
+  - `funasr`：本地推理，数据不出域。安装可选依赖后启用：
     ```bash
     uv sync --extra funasr        # 依赖较重（torch 等）
     ASR_PROVIDER=funasr uv run uvicorn app.main:app
     ```
-    首次运行自动从 ModelScope 下载模型（约 1-2GB）；CPU 可推理，
-    长音频耗时较长。支持热词注入（provider 接口 hotwords 参数）
+    主模型 `FUNASR_MODEL` 可选：`paraformer-zh`（默认，快）或
+    `FunAudioLLM/Fun-ASR-Nano-2512`（LLM-based，识别力更强、CPU 更慢，
+    支持 31 语种/方言/热词）；VAD/标点/CAM++ 声纹不随主模型变化。
+    首次运行自动从 ModelScope 下载模型；转码阶段默认做
+    降噪 + 响度归一化（`TRANSCODE_FILTERS`），VAD 阈值可调
+    （`FUNASR_SPEECH_NOISE_THRES`）
+  - `tingwu`：通义听悟云 ASR（会议场景：远场/抢话/多人分离最强）：
+    ```bash
+    uv sync --extra tingwu
+    # .env 配置 ALIYUN_ACCESS_KEY_ID/SECRET、TINGWU_APP_KEY、
+    # OSS_ENDPOINT、OSS_BUCKET（音频经 OSS 中转给听悟拉取）
+    ASR_PROVIDER=tingwu uv run uvicorn app.main:app
+    ```
+    注意：听悟不返回 speaker embedding，voice_samples 暗桩在此
+    provider 下为空（本地 CAM++ 补采样为后续增强项）
   - 云 provider（阿里云/腾讯云等）在 `app/services/asr/__init__.py` 注册即可接入
 - LLM Router（`LLM_PROVIDERS` 环境变量，逗号分隔优先级）：
   - `gemini`（默认主力，Gemini Flash）+ `glm`（GLM Flash 中文兜底），

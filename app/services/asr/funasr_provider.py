@@ -11,6 +11,7 @@ import wave
 from pathlib import Path
 from typing import Any
 
+from app.core.config import settings
 from app.services.asr.base import (
     ASRProvider,
     ASRResult,
@@ -20,7 +21,6 @@ from app.services.asr.base import (
 
 logger = logging.getLogger(__name__)
 
-_ASR_MODEL = "paraformer-zh"
 _VAD_MODEL = "fsmn-vad"
 _PUNC_MODEL = "ct-punc"
 _SPK_MODEL = "cam++"
@@ -93,10 +93,8 @@ class FunASRProvider(ASRProvider):
         if cls._pipeline is None:
             logger.info("loading FunASR models (first run downloads from ModelScope)")
             cls._version = getattr(funasr, "__version__", "unknown")
-            from app.core.config import settings
-
             cls._pipeline = AutoModel(
-                model=_ASR_MODEL,
+                model=settings.funasr_model,
                 vad_model=_VAD_MODEL,
                 # 会议远场场景放宽语音/噪音阈值，减少小音量语句被 VAD 丢弃
                 vad_kwargs={
