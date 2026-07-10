@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     llm_providers: str = "gemini,glm"  # 逗号分隔优先级；测试/无 key 联调可用 "mock"
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash"
     glm_api_key: str = ""
     glm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     glm_model: str = "glm-4-flash"
