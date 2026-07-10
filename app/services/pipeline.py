@@ -10,7 +10,7 @@ import wave
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import delete
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -70,14 +70,22 @@ async def _stage_transcribe(
     session: AsyncSession, meeting: Meeting, wav_path: Path
 ) -> None:
     await _set_status(session, meeting, MeetingStatus.transcribing)
+    # 阶段级重试（PRD §2）：转写结果已入库则直接跳过，不重跑 ASR——
+    # segments 与 voice_samples 在同一事务提交，存在即代表该阶段完整成功；
+    # 已有的 SpeakerBinding 与物化的 person_id 也因此得以保留
+    existing = await session.scalar(
+        select(func.count())
+        .select_from(TranscriptSegment)
+        .where(TranscriptSegment.meeting_id == meeting.id)
+    )
+    if existing:
+        logger.info(
+            "transcribe stage skipped for %s: %d segments already persisted",
+            meeting.id,
+            existing,
+        )
+        return
     result = await get_asr_provider().transcribe(wav_path)
-    # 幂等：重试时清掉本会议旧的派生数据再写入
-    await session.execute(
-        delete(TranscriptSegment).where(TranscriptSegment.meeting_id == meeting.id)
-    )
-    await session.execute(
-        delete(VoiceSample).where(VoiceSample.source_meeting_id == meeting.id)
-    )
     session.add_all(
         TranscriptSegment(
             meeting_id=meeting.id,
