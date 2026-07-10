@@ -102,7 +102,8 @@ class FunASRProvider(ASRProvider):
                 vad_model=_VAD_MODEL,
                 # 会议远场场景放宽语音/噪音阈值，减少小音量语句被 VAD 丢弃
                 vad_kwargs={
-                    "speech_noise_thres": settings.funasr_speech_noise_thres
+                    "speech_noise_thres": settings.funasr_speech_noise_thres,
+                    "max_single_segment_time": settings.funasr_vad_max_segment_ms,
                 },
                 punc_model=_PUNC_MODEL,
                 spk_model=_SPK_MODEL,
