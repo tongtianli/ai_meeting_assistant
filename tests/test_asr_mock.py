@@ -4,7 +4,10 @@ from app.services.asr import MockASRProvider, get_asr_provider
 from tests.conftest import make_wav
 
 
-def test_factory_returns_mock_by_default() -> None:
+def test_factory_returns_configured_provider(monkeypatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "asr_provider", "mock")
     assert isinstance(get_asr_provider(), MockASRProvider)
 
 

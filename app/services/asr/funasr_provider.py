@@ -31,10 +31,14 @@ _INSTALL_HINT = (
 
 
 def parse_sentence_info(sentence_info: list[dict[str, Any]]) -> list[ASRSegment]:
-    """FunASR sentence_info（毫秒时间戳 + 整型 spk id）→ 统一 ASRSegment。"""
+    """FunASR sentence_info（毫秒时间戳 + 整型 spk id）→ 统一 ASRSegment。
+
+    文本字段因模型/版本而异：paraformer 系为 "text"，
+    Fun-ASR-Nano（funasr>=1.3）为 "sentence"。
+    """
     segments: list[ASRSegment] = []
     for item in sentence_info:
-        text = (item.get("text") or "").strip()
+        text = (item.get("text") or item.get("sentence") or "").strip()
         if not text:
             continue
         spk = int(item.get("spk", 0))
