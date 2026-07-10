@@ -93,9 +93,15 @@ class FunASRProvider(ASRProvider):
         if cls._pipeline is None:
             logger.info("loading FunASR models (first run downloads from ModelScope)")
             cls._version = getattr(funasr, "__version__", "unknown")
+            from app.core.config import settings
+
             cls._pipeline = AutoModel(
                 model=_ASR_MODEL,
                 vad_model=_VAD_MODEL,
+                # 会议远场场景放宽语音/噪音阈值，减少小音量语句被 VAD 丢弃
+                vad_kwargs={
+                    "speech_noise_thres": settings.funasr_speech_noise_thres
+                },
                 punc_model=_PUNC_MODEL,
                 spk_model=_SPK_MODEL,
                 disable_update=True,

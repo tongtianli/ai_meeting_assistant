@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     # ASR provider 选择（接口可替换，PRD §10）
     asr_provider: str = "mock"
+    # 转码前处理滤镜链（远场/小音量会议：去低频隆隆声 → 降噪 → 响度归一化，
+    # 避免 VAD 把音量低的语音段当静音丢弃）；置空字符串可禁用
+    transcode_filters: str = "highpass=f=80,afftdn,loudnorm=I=-16:TP=-1.5:LRA=11"
+    # FunASR VAD 语音/噪音判定阈值，越低越不容易丢弃小音量语音（官方默认 0.6）
+    funasr_speech_noise_thres: float = 0.5
 
     # 鉴权（PRD §9.2：全站 Bearer Token JWT，MVP 单默认用户）
     # HS256 密钥需 ≥32 字节；生产环境必须通过环境变量覆盖
