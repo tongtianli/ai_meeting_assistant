@@ -118,6 +118,19 @@ curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
 - 存储层抽象（`app/services/storage.py`）：MVP 本地磁盘，二期换对象存储
   预签名直传时管道不变
 
+## 临时公网分享（ngrok）
+
+前端同源托管、全部相对路径，一条隧道即可：
+
+```bash
+ngrok config add-authtoken <token>   # https://ngrok.com 免费注册
+ngrok http 8000                      # 分享输出的 https URL
+# 免费账号可用固定域名：ngrok http --domain=你的名字.ngrok-free.app 8000
+```
+
+分享前务必修改 `.env` 中的 `AUTH_PASSWORD` 与 `AUTH_SECRET`（默认值等于没锁门）
+并重启。注意：MVP 为单用户设计，持有口令者可见全部会议数据（PRD §9.4）。
+
 ## 项目结构
 
 ```
