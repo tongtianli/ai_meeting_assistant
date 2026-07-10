@@ -109,6 +109,11 @@ curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
     首次运行自动从 ModelScope 下载模型；转码阶段默认做
     降噪 + 响度归一化（`TRANSCODE_FILTERS`），VAD 阈值可调
     （`FUNASR_SPEECH_NOISE_THRES`）
+  - `seedasr`：火山引擎 Seed ASR 2.0（LLM-based，中文识别第一梯队；
+    base64 直传无需对象存储）。配置 `VOLC_APP_KEY` / `VOLC_ACCESS_KEY`
+    （控制台 AppID/AccessToken）与 `VOLC_RESOURCE_ID`；声纹匹配等附加
+    参数经 `SEEDASR_EXTRA_REQUEST`（JSON）透传，命中的声纹名称直接
+    作为说话人标签
   - `tingwu`：通义听悟云 ASR（会议场景：远场/抢话/多人分离最强）：
     ```bash
     uv sync --extra tingwu
