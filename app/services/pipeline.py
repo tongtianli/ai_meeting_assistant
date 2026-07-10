@@ -86,6 +86,10 @@ async def _stage_transcribe(
         )
         return
     result = await get_asr_provider().transcribe(wav_path)
+    if not result.segments:
+        raise RuntimeError(
+            "ASR produced no segments; check provider logs before retrying"
+        )
     session.add_all(
         TranscriptSegment(
             meeting_id=meeting.id,

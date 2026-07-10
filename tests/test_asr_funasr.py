@@ -57,3 +57,22 @@ def test_transcribe_without_funasr_raises_install_hint(tmp_path: Path) -> None:
     provider = FunASRProvider()
     with pytest.raises(RuntimeError, match="uv sync --extra funasr"):
         asyncio.run(provider.transcribe(tmp_path / "a.wav"))
+
+
+def test_transcribe_raises_diagnostic_when_no_sentence_info(
+    tmp_path, monkeypatch
+) -> None:
+    """spk/punc 组合未生效（如版本不匹配）时应报可诊断错误而非静默 0 条。"""
+
+    class _FakePipeline:
+        def generate(self, input, **kwargs):
+            return [{"key": "x", "text": "有文本但没有说话人信息"}]
+
+    provider = FunASRProvider()
+    monkeypatch.setattr(
+        FunASRProvider,
+        "_load_models",
+        classmethod(lambda cls: (_FakePipeline(), None)),
+    )
+    with pytest.raises(RuntimeError, match="no sentence_info"):
+        asyncio.run(provider.transcribe(tmp_path / "a.wav"))

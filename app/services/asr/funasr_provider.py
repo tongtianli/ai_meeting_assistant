@@ -122,6 +122,16 @@ class FunASRProvider(ASRProvider):
             kwargs["hotword"] = " ".join(hotwords)  # 热词注入（PRD Feature 1）
         raw = pipeline.generate(input=str(audio_path), **kwargs)
         sentence_info = raw[0].get("sentence_info", []) if raw else []
+        if not sentence_info:
+            # 常见于 spk/punc 组合未生效（如模型与 funasr 版本不匹配时
+            # diarization 被静默禁用）——带上原始输出结构便于诊断
+            keys = sorted(raw[0].keys()) if raw else []
+            raise RuntimeError(
+                "FunASR returned no sentence_info (diarization inactive?); "
+                f"raw output keys: {keys}. 若日志中出现 'Missing punc_model' "
+                "等提示，请升级 funasr: uv lock --upgrade-package funasr && "
+                "uv sync --extra funasr"
+            )
         segments = parse_sentence_info(sentence_info)
         embeddings = self._extract_speaker_embeddings(
             spk_encoder, audio_path, segments
