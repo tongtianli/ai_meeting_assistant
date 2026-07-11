@@ -42,8 +42,9 @@ class Settings(BaseSettings):
     volc_access_key: str = ""  # 控制台 AccessToken
     volc_resource_id: str = "volc.bigasr.auc"  # 模型资源号，按控制台显示调整
     volc_base_url: str = "https://openspeech.bytedance.com/api/v3/auc/bigmodel"
-    # 直传体积上限，超过则先压成 mp3 再上传（长会议 wav 很大）
-    seedasr_max_upload_mb: int = 50
+    # 直传体积上限：网关约 16MB 请求体（实测），base64 膨胀 4/3 → 原始音频 ≤11MB；
+    # 超过则按时长自适应码率压成 mp3 再上传
+    seedasr_max_upload_mb: int = 11
     # 附加请求参数（JSON 对象字符串），如声纹匹配：
     # SEEDASR_EXTRA_REQUEST={"voice_print_list": ["vp-xxx"]}
     seedasr_extra_request: str = ""

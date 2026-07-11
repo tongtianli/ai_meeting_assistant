@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.services.asr import SeedASRProvider, get_asr_provider
-from app.services.asr.seedasr import parse_utterances
+from app.services.asr.seedasr import parse_utterances, pick_bitrate
 
 
 def test_registered_in_factory() -> None:
@@ -65,7 +65,29 @@ def test_parse_utterances_tolerates_empty() -> None:
     assert parse_utterances({"result": {"utterances": []}}) == []
 
 
-def test_transcribe_without_config_raises_hint(tmp_path: Path) -> None:
+def test_pick_bitrate_adapts_to_duration() -> None:
+    limit = 11 * 1024 * 1024  # 默认直传上限（网关 16MB 请求体 / base64 4/3）
+    # 短音频顶格 64kbps
+    assert pick_bitrate(600, limit) == 64_000
+    # 40 分钟：64kbps 会超限，需降档且结果落在上限内
+    bitrate = pick_bitrate(2400, limit)
+    assert 16_000 <= bitrate < 64_000
+    assert bitrate * 2400 / 8 <= limit
+    # 时长未知：保守用 64kbps（提交失败时错误信息可见）
+    assert pick_bitrate(0, limit) == 64_000
+
+
+def test_pick_bitrate_rejects_overlong_audio() -> None:
+    with pytest.raises(RuntimeError, match="too long"):
+        pick_bitrate(3 * 3600, 11 * 1024 * 1024)  # 3 小时超出 16kbps 兜底
+
+
+def test_transcribe_without_config_raises_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 隔离本机 .env 里的真实凭证
+    monkeypatch.setattr("app.core.config.settings.volc_app_key", "")
+    monkeypatch.setattr("app.core.config.settings.volc_access_key", "")
     provider = SeedASRProvider()
     with pytest.raises(RuntimeError, match="seedasr is not configured"):
         asyncio.run(provider.transcribe(tmp_path / "a.wav"))

@@ -63,15 +63,50 @@ def parse_utterances(payload: dict[str, Any]) -> list[ASRSegment]:
     return segments
 
 
+async def _probe_duration_seconds(audio_path: Path) -> float:
+    proc = await asyncio.create_subprocess_exec(
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    try:
+        return float(stdout.decode().strip())
+    except ValueError:
+        return 0.0
+
+
+def pick_bitrate(duration_seconds: float, limit_bytes: int) -> int:
+    """按时长选码率（bps），保证 mp3 落在直传上限内（留 4% 封装余量）。
+
+    上限 64kbps（16k 语音识别的无损级），下限 16kbps；再低识别质量
+    不可接受 —— 超长音频应走 URL 模式（对象存储）而非继续压。
+    """
+    if duration_seconds <= 0:
+        return 64_000
+    bitrate = int(limit_bytes * 8 * 0.96 / duration_seconds)
+    if bitrate < 16_000:
+        raise RuntimeError(
+            f"audio too long for seedasr direct upload "
+            f"({duration_seconds / 60:.0f}min > ~90min at 16kbps); "
+            "use URL-based submission (object storage) instead"
+        )
+    return min(64_000, bitrate)
+
+
 async def _compress_if_needed(audio_path: Path) -> tuple[bytes, str]:
-    """超过直传上限的 wav 压成 64kbps 单声道 mp3（对 16k 语音识别无损级影响）。"""
+    """超过直传上限的音频压成单声道 mp3，码率按时长自适应。"""
     data = audio_path.read_bytes()
     limit = settings.seedasr_max_upload_mb * 1024 * 1024
     if len(data) <= limit:
         return data, audio_path.suffix.lstrip(".").lower() or "wav"
+    duration = await _probe_duration_seconds(audio_path)
+    bitrate = pick_bitrate(duration, limit)
     mp3_path = audio_path.with_suffix(".upload.mp3")
     proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-y", "-i", str(audio_path), "-ac", "1", "-b:a", "64k",
+        "ffmpeg", "-y", "-i", str(audio_path), "-ac", "1",
+        "-b:a", str(bitrate),
         str(mp3_path),
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
@@ -81,13 +116,20 @@ async def _compress_if_needed(audio_path: Path) -> tuple[bytes, str]:
         raise TranscodeError(
             f"compress for upload failed: {stderr.decode(errors='replace')[-300:]}"
         )
+    compressed = mp3_path.read_bytes()
+    if len(compressed) > limit:
+        raise RuntimeError(
+            f"seedasr upload still exceeds limit after compression "
+            f"({len(compressed) / 1e6:.1f}MB > {limit / 1e6:.1f}MB)"
+        )
     logger.info(
-        "seedasr: compressed %s (%.1fMB) -> mp3 (%.1fMB) for upload",
+        "seedasr: compressed %s (%.1fMB) -> mp3 %dkbps (%.1fMB) for upload",
         audio_path.name,
         len(data) / 1e6,
-        mp3_path.stat().st_size / 1e6,
+        bitrate // 1000,
+        len(compressed) / 1e6,
     )
-    return mp3_path.read_bytes(), "mp3"
+    return compressed, "mp3"
 
 
 class SeedASRProvider(ASRProvider):
