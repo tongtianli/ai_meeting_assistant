@@ -187,12 +187,28 @@ class SeedASRProvider(ASRProvider):
             "request": self._build_request(hotwords),
         }
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
-            resp = await client.post(
-                f"{settings.volc_base_url}/submit",
-                json=submit_body,
-                headers=self._headers(request_id),
-            )
+        # trust_env=False：不继承终端的 http(s)_proxy —— 字节端点国内直连即可，
+        # 走本地代理时大体积 POST 常被代理层掐断（表现为 ReadError）
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(300.0, connect=10.0), trust_env=False
+        ) as client:
+            resp = None
+            for attempt in range(3):
+                try:
+                    resp = await client.post(
+                        f"{settings.volc_base_url}/submit",
+                        json=submit_body,
+                        headers=self._headers(request_id),
+                    )
+                    break
+                except httpx.TransportError as exc:
+                    if attempt == 2:
+                        raise
+                    logger.warning(
+                        "seedasr submit transport error (attempt %d/3): %s",
+                        attempt + 1, exc,
+                    )
+                    await asyncio.sleep(2 * (attempt + 1))
             status = self._status_code(resp)
             if resp.status_code != 200 or (status and status != _OK_STATUS):
                 raise RuntimeError(
