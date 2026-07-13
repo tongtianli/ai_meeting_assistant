@@ -21,6 +21,7 @@ button {
 }
 button:disabled { background: #a8bce0; cursor: not-allowed; }
 button.secondary { background: #eef1f5; color: #1f2329; }
+button.danger { background: #fde8e8; color: #c0392b; }
 input[type="text"], input[type="password"] {
   padding: 8px 10px; border: 1px solid #d5dae1; border-radius: 6px;
   font-size: 14px; width: 100%;

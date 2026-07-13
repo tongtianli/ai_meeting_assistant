@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { createExampleFromMeeting } from "../api/examples";
 import {
+  deleteMeeting,
   downloadTranscript,
   downloadWord,
   getAudioUrl,
@@ -19,6 +20,7 @@ import TranscriptView from "../components/TranscriptView";
 
 export default function MeetingDetailPage() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -91,6 +93,19 @@ export default function MeetingDetailPage() {
     }
   }
 
+  async function handleDelete() {
+    if (
+      !window.confirm("删除本次会议？音频、转录、纪要将一并永久删除，无法恢复。")
+    )
+      return;
+    try {
+      await deleteMeeting(id);
+      navigate("/"); // 会议已删除，返回列表
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除失败");
+    }
+  }
+
   if (!meeting) {
     return (
       <div className="container">
@@ -105,7 +120,12 @@ export default function MeetingDetailPage() {
         <h1>
           <Link to="/">←</Link> {meeting.title}
         </h1>
-        <StatusBadge status={meeting.status} />
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <StatusBadge status={meeting.status} />
+          <button className="danger" onClick={handleDelete}>
+            删除会议
+          </button>
+        </div>
       </div>
       {error && <div className="error">{error}</div>}
       {notice && <div className="card muted">{notice}</div>}

@@ -45,6 +45,8 @@ export async function request<T>(
     }
     throw new ApiError(resp.status, detail);
   }
+  // 204 No Content（如 DELETE）无响应体，不能调 resp.json()
+  if (resp.status === 204) return undefined as T;
   return (await resp.json()) as T;
 }
 
