@@ -30,6 +30,7 @@ async def run_pipeline(meeting_id: UUID) -> None:
         if meeting is None:
             logger.error("pipeline: meeting %s not found", meeting_id)
             return
+        meeting.error_message = None  # 重试时清掉上次失败的残留文案
         try:
             wav_path = await _stage_transcode(session, meeting)
             await _stage_transcribe(session, meeting, wav_path)
@@ -86,6 +87,10 @@ async def _stage_transcribe(
         )
         return
     result = await get_asr_provider().transcribe(wav_path)
+    if not result.segments:
+        raise RuntimeError(
+            "ASR produced no segments; check provider logs before retrying"
+        )
     session.add_all(
         TranscriptSegment(
             meeting_id=meeting.id,

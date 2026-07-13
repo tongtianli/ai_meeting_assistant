@@ -57,3 +57,42 @@ def test_transcribe_without_funasr_raises_install_hint(tmp_path: Path) -> None:
     provider = FunASRProvider()
     with pytest.raises(RuntimeError, match="uv sync --extra funasr"):
         asyncio.run(provider.transcribe(tmp_path / "a.wav"))
+
+
+def test_transcribe_raises_diagnostic_when_no_sentence_info(
+    tmp_path, monkeypatch
+) -> None:
+    """spk/punc 组合未生效（如版本不匹配）时应报可诊断错误而非静默 0 条。"""
+
+    class _FakePipeline:
+        def generate(self, input, **kwargs):
+            return [{"key": "x", "text": "有文本但没有说话人信息"}]
+
+    provider = FunASRProvider()
+    monkeypatch.setattr(
+        FunASRProvider,
+        "_load_models",
+        classmethod(lambda cls: (_FakePipeline(), None)),
+    )
+    with pytest.raises(RuntimeError, match="no sentence_info"):
+        asyncio.run(provider.transcribe(tmp_path / "a.wav"))
+
+
+def test_parse_sentence_info_nano_sentence_key() -> None:
+    """funasr>=1.3 的 Fun-ASR-Nano 用 'sentence' 而非 'text' 作为文本字段。"""
+    raw = [
+        {
+            "sentence": "这个门面要装修。",
+            "start": 0,
+            "end": 14630,
+            "spk": 0,
+            "timestamp": [[180, 240]],
+        },
+        {"sentence": "开会的话取消掉。", "start": 26300, "end": 39700, "spk": 1},
+    ]
+    segments = parse_sentence_info(raw)
+
+    assert [s.text for s in segments] == ["这个门面要装修。", "开会的话取消掉。"]
+    assert segments[0].speaker_label == "speaker_001"
+    assert segments[1].speaker_label == "speaker_002"
+    assert segments[0].end_time == 14.63

@@ -44,8 +44,10 @@ def auth_headers(client) -> dict[str, str]:
 
 
 @pytest.fixture(autouse=True)
-def _mock_llm(monkeypatch):
-    """测试环境统一走 mock LLM provider，避免真实网络调用。"""
+def _mock_providers(monkeypatch):
+    """测试环境统一走 mock provider，不受本机 .env 配置影响，
+    避免真实 ASR 推理与 LLM 网络调用。"""
     from app.core.config import settings as _settings
 
     monkeypatch.setattr(_settings, "llm_providers", "mock")
+    monkeypatch.setattr(_settings, "asr_provider", "mock")

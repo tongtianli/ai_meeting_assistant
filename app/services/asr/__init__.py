@@ -7,11 +7,14 @@ from app.services.asr.base import (
 )
 from app.services.asr.funasr_provider import FunASRProvider
 from app.services.asr.mock import MockASRProvider
+from app.services.asr.seedasr import SeedASRProvider
+from app.services.asr.tingwu import TingwuProvider
 
 _PROVIDERS: dict[str, type[ASRProvider]] = {
     MockASRProvider.name: MockASRProvider,
     FunASRProvider.name: FunASRProvider,
-    # 云 provider（阿里云/腾讯云等）在此注册
+    SeedASRProvider.name: SeedASRProvider,
+    TingwuProvider.name: TingwuProvider,
 }
 
 
@@ -32,5 +35,7 @@ __all__ = [
     "SpeakerEmbeddingSample",
     "FunASRProvider",
     "MockASRProvider",
+    "SeedASRProvider",
+    "TingwuProvider",
     "get_asr_provider",
 ]

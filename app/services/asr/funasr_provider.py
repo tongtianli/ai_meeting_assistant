@@ -11,6 +11,7 @@ import wave
 from pathlib import Path
 from typing import Any
 
+from app.core.config import settings
 from app.services.asr.base import (
     ASRProvider,
     ASRResult,
@@ -20,7 +21,6 @@ from app.services.asr.base import (
 
 logger = logging.getLogger(__name__)
 
-_ASR_MODEL = "paraformer-zh"
 _VAD_MODEL = "fsmn-vad"
 _PUNC_MODEL = "ct-punc"
 _SPK_MODEL = "cam++"
@@ -31,10 +31,14 @@ _INSTALL_HINT = (
 
 
 def parse_sentence_info(sentence_info: list[dict[str, Any]]) -> list[ASRSegment]:
-    """FunASR sentence_info（毫秒时间戳 + 整型 spk id）→ 统一 ASRSegment。"""
+    """FunASR sentence_info（毫秒时间戳 + 整型 spk id）→ 统一 ASRSegment。
+
+    文本字段因模型/版本而异：paraformer 系为 "text"，
+    Fun-ASR-Nano（funasr>=1.3）为 "sentence"。
+    """
     segments: list[ASRSegment] = []
     for item in sentence_info:
-        text = (item.get("text") or "").strip()
+        text = (item.get("text") or item.get("sentence") or "").strip()
         if not text:
             continue
         spk = int(item.get("spk", 0))
@@ -94,8 +98,13 @@ class FunASRProvider(ASRProvider):
             logger.info("loading FunASR models (first run downloads from ModelScope)")
             cls._version = getattr(funasr, "__version__", "unknown")
             cls._pipeline = AutoModel(
-                model=_ASR_MODEL,
+                model=settings.funasr_model,
                 vad_model=_VAD_MODEL,
+                # 会议远场场景放宽语音/噪音阈值，减少小音量语句被 VAD 丢弃
+                vad_kwargs={
+                    "speech_noise_thres": settings.funasr_speech_noise_thres,
+                    "max_single_segment_time": settings.funasr_vad_max_segment_ms,
+                },
                 punc_model=_PUNC_MODEL,
                 spk_model=_SPK_MODEL,
                 disable_update=True,
@@ -118,6 +127,16 @@ class FunASRProvider(ASRProvider):
             kwargs["hotword"] = " ".join(hotwords)  # 热词注入（PRD Feature 1）
         raw = pipeline.generate(input=str(audio_path), **kwargs)
         sentence_info = raw[0].get("sentence_info", []) if raw else []
+        if not sentence_info:
+            # 常见于 spk/punc 组合未生效（如模型与 funasr 版本不匹配时
+            # diarization 被静默禁用）——带上原始输出结构便于诊断
+            keys = sorted(raw[0].keys()) if raw else []
+            raise RuntimeError(
+                "FunASR returned no sentence_info (diarization inactive?); "
+                f"raw output keys: {keys}. 若日志中出现 'Missing punc_model' "
+                "等提示，请升级 funasr: uv lock --upgrade-package funasr && "
+                "uv sync --extra funasr"
+            )
         segments = parse_sentence_info(sentence_info)
         embeddings = self._extract_speaker_embeddings(
             spk_encoder, audio_path, segments

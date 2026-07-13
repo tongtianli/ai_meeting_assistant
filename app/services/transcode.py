@@ -5,6 +5,8 @@
 import asyncio
 from pathlib import Path
 
+from app.core.config import settings
+
 
 class TranscodeError(RuntimeError):
     pass
@@ -13,10 +15,13 @@ class TranscodeError(RuntimeError):
 async def transcode_to_wav16k_mono(src: Path, dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{src.stem}.wav"
+    cmd = ["ffmpeg", "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000"]
+    if settings.transcode_filters:
+        cmd += ["-af", settings.transcode_filters]
+    cmd.append(str(dest))
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000",
-            str(dest),
+            *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
