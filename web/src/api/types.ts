@@ -67,6 +67,21 @@ export interface Summary {
   created_at: string;
 }
 
+export interface Citation {
+  seq: number;
+  start_time: number;
+  speaker_name: string;
+  text: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  citations: Citation[];
+  created_at: string;
+}
+
 export const PROCESSING_STATUSES: MeetingStatus[] = [
   "uploaded",
   "transcoding",

@@ -8,6 +8,7 @@ from sqlalchemy import update
 
 from app.api.routes.audio import router as audio_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.chat import router as chat_router
 from app.api.routes.examples import router as examples_router
 from app.api.routes.glossary import router as glossary_router
 from app.api.routes.health import router as health_router
@@ -58,6 +59,7 @@ app.include_router(meetings_router, prefix="/api")
 app.include_router(persons_router, prefix="/api")
 app.include_router(examples_router, prefix="/api")
 app.include_router(glossary_router, prefix="/api")
+app.include_router(chat_router, prefix="/api")
 app.include_router(audio_router, prefix="/api")
 
 # 生产部署：构建产物存在时由 FastAPI 同源托管（无 CORS 问题）；

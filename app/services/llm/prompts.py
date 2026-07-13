@@ -102,3 +102,26 @@ SYSTEM_PLAIN = (
 
 def plain_text_prompt(transcript: str) -> str:
     return f"以下是一场会议的完整转录：\n\n{transcript}\n\n请生成纯文本会议纪要。"
+
+
+# AI 会议问答（RAG，PRD Feature 5）。"会议问答助手" 是稳定标记，供 mock 识别。
+SYSTEM_QA = (
+    "你是一名会议问答助手。你只输出合法的 JSON 对象，不输出 markdown 或其他内容。"
+    "只依据给定的会议转录片段回答问题，不得臆造未出现的信息；"
+    "引用依据时使用片段行首方括号内的 segment 编号（seq）。"
+    "若给定片段不足以回答，如实说明未找到相关内容。"
+)
+
+_QA_SCHEMA_DESC = """输出 JSON 对象，字段如下：
+{
+  "answer": "对问题的回答（简洁中文；无法回答则说明未在会议中找到相关内容）",
+  "cited_segment_seqs": [引用到的 segment 编号（整数）列表，无则空数组]
+}"""
+
+
+def qa_prompt(question: str, segment_lines: str) -> str:
+    return (
+        f"以下是与问题相关的会议转录片段，每行格式为 [seq] [时间] 说话人: 内容。\n\n"
+        f"{segment_lines}\n\n问题：{question}\n\n"
+        f"请依据上述片段回答。{_QA_SCHEMA_DESC}"
+    )

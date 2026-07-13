@@ -1,5 +1,6 @@
 """确定性 Mock LLM：无 key 联调与测试用，输出与 Mock ASR 剧本自洽的合法纪要 JSON。"""
 import json
+import re
 
 from app.services.llm.base import LLMProvider, LLMResponse
 
@@ -49,11 +50,19 @@ class MockLLMProvider(LLMProvider):
         json_mode: bool = True,
         temperature: float = 0.2,
     ) -> LLMResponse:
-        text = (
-            json.dumps(_SUMMARY_JSON, ensure_ascii=False)
-            if json_mode
-            else _SUMMARY_JSON["summary"]
-        )
+        if "会议问答助手" in system:  # QA 分支（SYSTEM_QA 稳定标记）
+            # 引用检索到片段中 seq 最小的一条，保证落在真实 segment 上
+            seqs = [int(m) for m in re.findall(r"\[(\d+)\]", user)]
+            cited = [min(seqs)] if seqs else []
+            payload = {
+                "answer": "根据会议记录，相关内容见引用片段。",
+                "cited_segment_seqs": cited,
+            }
+            text = json.dumps(payload, ensure_ascii=False)
+        elif json_mode:
+            text = json.dumps(_SUMMARY_JSON, ensure_ascii=False)
+        else:
+            text = _SUMMARY_JSON["summary"]
         return LLMResponse(
             text=text,
             provider=self.name,

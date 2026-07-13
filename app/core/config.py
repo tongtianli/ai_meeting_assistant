@@ -83,5 +83,13 @@ class Settings(BaseSettings):
     glm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     glm_model: str = "glm-4-flash"
 
+    # AI 问答 RAG（PRD Feature 5）。embedding 不能像 LLM 那样降级混用
+    # （不同模型向量空间不通），故单一 provider、无 fallback。
+    embedding_provider: str = "glm"  # glm | gemini | mock（key 缺失时报错不降级）
+    glm_embedding_model: str = "embedding-3"
+    gemini_embedding_model: str = "text-embedding-004"
+    embedding_batch_size: int = 32
+    qa_top_k: int = 6  # 每次提问检索的 segment 数
+
 
 settings = Settings()
