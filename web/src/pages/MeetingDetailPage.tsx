@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { createExampleFromMeeting } from "../api/examples";
 import {
   downloadTranscript,
   downloadWord,
@@ -23,6 +24,7 @@ export default function MeetingDetailPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [tab, setTab] = useState<"summary" | "transcript">("summary");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [currentTime, setCurrentTime] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [audioSrc, setAudioSrc] = useState("");
@@ -67,6 +69,17 @@ export default function MeetingDetailPage() {
     void audio.play();
   }
 
+  async function saveAsExample() {
+    setError("");
+    setNotice("");
+    try {
+      const ex = await createExampleFromMeeting(id);
+      setNotice(`已存为范例「${ex.title}」，之后生成纪要将模仿其文风（范例库可润色）`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "存为范例失败");
+    }
+  }
+
   async function handleRename(label: string, currentName: string) {
     const name = window.prompt(`将 ${label} 重命名为：`, currentName)?.trim();
     if (!name) return;
@@ -95,6 +108,7 @@ export default function MeetingDetailPage() {
         <StatusBadge status={meeting.status} />
       </div>
       {error && <div className="error">{error}</div>}
+      {notice && <div className="card muted">{notice}</div>}
 
       {meeting.status === "failed" && (
         <div className="card">
@@ -141,6 +155,9 @@ export default function MeetingDetailPage() {
               原始转录
             </button>
             <span style={{ flex: 1 }} />
+            <button className="secondary" onClick={() => void saveAsExample()}>
+              存为范例
+            </button>
             <button
               className="secondary"
               onClick={() => downloadTranscript(id, meeting.title)}

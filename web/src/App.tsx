@@ -1,5 +1,6 @@
 import { Navigate, Route, HashRouter, Routes } from "react-router-dom";
 import { getToken } from "./api/client";
+import ExamplesPage from "./pages/ExamplesPage";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import MeetingDetailPage from "./pages/MeetingDetailPage";
@@ -35,6 +36,14 @@ export default function App() {
           element={
             <RequireAuth>
               <PersonsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/examples"
+          element={
+            <RequireAuth>
+              <ExamplesPage />
             </RequireAuth>
           }
         />

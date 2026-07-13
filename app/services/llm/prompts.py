@@ -33,7 +33,7 @@ _SCHEMA_DESC = """输出 JSON 对象，字段如下：
   ]
 }"""
 
-# 公司纪要文风（从既有纪要范本蒸馏的硬规则；范例库 few-shot 为二期）
+# 公司纪要文风第一层：从既有纪要范本蒸馏的硬规则
 _STYLE_RULES = """正文写作规范（严格遵守）：
 1. 按议题分组（topics），每个议题标注责任人；同类事项归入同一议题，一场会议通常 3~6 个议题
 2. 条目用行动式短句：事项 + 要求 + 时限/标准，一到两句一条，每个议题 2~4 条；
@@ -43,10 +43,30 @@ _STYLE_RULES = """正文写作规范（严格遵守）：
 5. 只写结论与要求，不写讨论过程、口语原话和车轱辘话"""
 
 
-def single_pass_prompt(transcript: str) -> str:
+def _examples_block(examples: list[str] | None) -> str:
+    """公司纪要文风第二层：范例库 few-shot。
+
+    只注入最终产出阶段（single_pass / reduce），map 阶段不注入——
+    文风由最后一步定型，中间纪要多带范例徒耗 token。
+    """
+    if not examples:
+        return ""
+    parts = "\n\n".join(
+        f"--- 范例 {i + 1} ---\n{e}" for i, e in enumerate(examples)
+    )
+    return (
+        "\n\n以下是本公司既往会议纪要范例。请模仿其文风：议题命名方式、"
+        "条目的句式与详略、惯用语汇。注意：范例只用于学习文风，"
+        "其中的事项、人名、数字严禁出现在本次纪要中；输出仍是上述 JSON 格式，"
+        "范例正文对应 topics 字段的内容。\n\n" + parts
+    )
+
+
+def single_pass_prompt(transcript: str, examples: list[str] | None = None) -> str:
     return (
         f"以下是一场会议的完整转录，每行格式为 [seq] [时间] 说话人: 内容。\n\n"
         f"{transcript}\n\n请生成结构化会议纪要。{_SCHEMA_DESC}\n\n{_STYLE_RULES}"
+        f"{_examples_block(examples)}"
     )
 
 
@@ -59,7 +79,9 @@ def map_prompt(transcript_chunk: str, part: int, total: int) -> str:
     )
 
 
-def reduce_prompt(partial_summaries: list[str]) -> str:
+def reduce_prompt(
+    partial_summaries: list[str], examples: list[str] | None = None
+) -> str:
     parts = "\n\n".join(
         f"--- 第 {i + 1} 部分纪要 ---\n{p}" for i, p in enumerate(partial_summaries)
     )
@@ -68,7 +90,7 @@ def reduce_prompt(partial_summaries: list[str]) -> str:
         f"请合并为一份完整的最终会议纪要：去重、合并同类议题（同一责任人的"
         f"相关事项归入同一议题），跨段延续的 TODO 与决策不得丢失，"
         f"保留原有的 source_segment_seq 引用。"
-        f"{_SCHEMA_DESC}\n\n{_STYLE_RULES}"
+        f"{_SCHEMA_DESC}\n\n{_STYLE_RULES}{_examples_block(examples)}"
     )
 
 
