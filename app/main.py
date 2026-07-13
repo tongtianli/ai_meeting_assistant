@@ -10,6 +10,7 @@ from app.api.routes.audio import router as audio_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.health import router as health_router
 from app.api.routes.meetings import router as meetings_router
+from app.api.routes.persons import router as persons_router
 from app.db.session import SessionLocal
 from app.models import Meeting, MeetingStatus
 
@@ -52,6 +53,7 @@ app = FastAPI(title="AI Meeting Assistant", lifespan=lifespan)
 app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(meetings_router, prefix="/api")
+app.include_router(persons_router, prefix="/api")
 app.include_router(audio_router, prefix="/api")
 
 # 生产部署：构建产物存在时由 FastAPI 同源托管（无 CORS 问题）；

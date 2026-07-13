@@ -155,7 +155,7 @@ def test_retry_after_summarize_failure_reuses_transcript(
     real_asr = MockASRProvider()
 
     class CountingASR(MockASRProvider):
-        async def transcribe(self, audio_path, hotwords=None):
+        async def transcribe(self, audio_path, hotwords=None, voiceprint_ids=None):
             asr_calls["n"] += 1
             return await real_asr.transcribe(audio_path, hotwords)
 

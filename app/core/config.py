@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     seedasr_extra_request: str = ""
     seedasr_poll_interval_seconds: float = 5.0
     seedasr_timeout_seconds: float = 3600.0
+    # 声纹自动绑定的最低置信度（0 = 信任云端阈值，命中即绑定；
+    # 返回带 score 时可调高做二次过滤，如 0.6）
+    voiceprint_auto_bind_min_confidence: float = 0.0
 
     # 鉴权（PRD §9.2：全站 Bearer Token JWT，MVP 单默认用户）
     # HS256 密钥需 ≥32 字节；生产环境必须通过环境变量覆盖

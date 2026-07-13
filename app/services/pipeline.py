@@ -15,8 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.models import Meeting, MeetingStatus, TranscriptSegment, VoiceSample
+from app.models import Meeting, MeetingStatus, Person, TranscriptSegment, VoiceSample
 from app.services.asr import get_asr_provider
+from app.services.speakers import auto_bind_voiceprints
 from app.services.summarize import summarize_meeting
 from app.services.storage import get_audio_storage
 from app.services.transcode import transcode_to_wav16k_mono
@@ -86,7 +87,18 @@ async def _stage_transcribe(
             existing,
         )
         return
-    result = await get_asr_provider().transcribe(wav_path)
+    # 已登记云端声纹的 Person → 随任务下发做声纹匹配（支持的 provider 生效）
+    vp_ids = list(
+        await session.scalars(
+            select(Person.voiceprint_id).where(
+                Person.user_id == meeting.user_id,
+                Person.voiceprint_id.is_not(None),
+            )
+        )
+    )
+    result = await get_asr_provider().transcribe(
+        wav_path, voiceprint_ids=vp_ids or None
+    )
     if not result.segments:
         raise RuntimeError(
             "ASR produced no segments; check provider logs before retrying"
@@ -113,6 +125,11 @@ async def _stage_transcribe(
         )
         for e in result.speaker_embeddings
     )
+    # 声纹命中 → 自动绑定（与 segments 同事务：要么全成，要么重试时整体重来）
+    await session.flush()
+    bound = await auto_bind_voiceprints(session, meeting, result.segments)
+    if bound:
+        logger.info("voiceprint auto-binding: %d speakers bound", bound)
     await session.commit()
 
 
