@@ -14,6 +14,10 @@ class MeetingOut(BaseModel):
     status: MeetingStatus
     duration: float | None
     error_message: str | None
+    location: str | None = None
+    host: str | None = None
+    recorder: str | None = None
+    importance: str | None = None
     created_at: datetime
 
 

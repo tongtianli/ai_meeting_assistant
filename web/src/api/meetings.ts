@@ -30,10 +30,24 @@ export function getMeeting(id: string): Promise<Meeting> {
   return request<Meeting>(`/api/meetings/${id}`);
 }
 
-export function uploadMeeting(title: string, file: File): Promise<Meeting> {
+export interface MeetingHeaderFields {
+  location?: string;
+  host?: string;
+  recorder?: string;
+  importance?: string;
+}
+
+export function uploadMeeting(
+  title: string,
+  file: File,
+  header: MeetingHeaderFields = {},
+): Promise<Meeting> {
   const form = new FormData();
   form.append("title", title);
   form.append("file", file);
+  for (const [key, value] of Object.entries(header)) {
+    if (value) form.append(key, value);
+  }
   return request<Meeting>("/api/meetings", { method: "POST", body: form });
 }
 

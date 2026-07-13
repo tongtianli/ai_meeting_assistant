@@ -40,7 +40,12 @@ def test_export_docx_structured_with_rename(tmp_path, monkeypatch) -> None:
         mid = client.post(
             "/api/meetings",
             files={"file": ("w.wav", _wav_bytes(), "audio/wav")},
-            data={"title": "导出测试"},
+            data={
+                "title": "导出测试",
+                "location": "南站办公室",
+                "host": "倪总",
+                "recorder": "叶玉娇",
+            },
             headers=headers,
         ).json()["id"]
 
@@ -59,8 +64,14 @@ def test_export_docx_structured_with_rename(tmp_path, monkeypatch) -> None:
 
         text = _all_text(resp.content)
         assert "项目周会" in text  # mock 纪要标题
-        assert "会议总结" in text
-        assert "完成上传接口的开发" in text  # TODO 表格
+        # 公司模板抬头：上传时的选填字段落位
+        assert "南站办公室" in text and "倪总" in text and "叶玉娇" in text
+        assert "一般     重要     加急" in text  # 未指定重要程度时三档并列
+        # 正文按议题分组 + 责任人
+        assert "会议主要内容：" in text
+        assert "一、后端接口进展（责任人：speaker_001）" in text
+        assert "待办事项汇总" in text
+        assert "完成上传接口的开发" in text
         # 导出时通过来源 segment 现算负责人：重命名后立即用真名，无需重新摘要
         assert "张三" in text
         assert "00:00:0" in text  # TODO 来源时间戳
