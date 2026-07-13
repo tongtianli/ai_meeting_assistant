@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ActionItem, Meeting, Summary, TranscriptSegment
+from app.core.config import settings
+from app.models import ActionItem, Meeting, Summary, SummaryExample, TranscriptSegment
 from app.schemas.summary import SummaryContent
 from app.services.llm import LLMExhaustedError, build_router
 from app.services.llm.prompts import (
@@ -61,14 +62,42 @@ def chunk_lines(lines: list[str], budget: int = CHUNK_CHAR_BUDGET) -> list[str]:
     return chunks
 
 
-async def _generate_content(transcript_lines: list[str]) -> tuple[dict, str, bool]:
+async def load_style_examples(
+    session: AsyncSession, user_id
+) -> list[SummaryExample]:
+    """选取 few-shot 范例：启用的按更新时间取最新，受条数与字符预算约束。
+
+    超预算的单条范例跳过而非截断——被截断的半份纪要会教坏文风。
+    """
+    rows = await session.scalars(
+        select(SummaryExample)
+        .where(SummaryExample.user_id == user_id, SummaryExample.enabled.is_(True))
+        .order_by(SummaryExample.updated_at.desc())
+    )
+    selected: list[SummaryExample] = []
+    budget = settings.summary_examples_max_chars
+    for ex in rows:
+        if len(selected) >= settings.summary_examples_max_count:
+            break
+        if len(ex.content) > budget:
+            continue
+        selected.append(ex)
+        budget -= len(ex.content)
+    return selected
+
+
+async def _generate_content(
+    transcript_lines: list[str], examples: list[str] | None = None
+) -> tuple[dict, str, bool]:
     """返回 (content_json, 模型标识, degraded)。"""
     router = build_router()
     chunks = chunk_lines(transcript_lines)
     try:
         if len(chunks) == 1:
             content, resp = await router.generate_json(
-                SYSTEM_SUMMARIZER, single_pass_prompt(chunks[0]), SummaryContent
+                SYSTEM_SUMMARIZER,
+                single_pass_prompt(chunks[0], examples),
+                SummaryContent,
             )
         else:
             logger.info("long meeting: map-reduce over %d chunks", len(chunks))
@@ -79,7 +108,7 @@ async def _generate_content(transcript_lines: list[str]) -> tuple[dict, str, boo
                 )
                 partials.append(partial.model_dump_json())
             content, resp = await router.generate_json(
-                SYSTEM_SUMMARIZER, reduce_prompt(partials), SummaryContent
+                SYSTEM_SUMMARIZER, reduce_prompt(partials, examples), SummaryContent
             )
         return content.model_dump(), f"{resp.provider}/{resp.model}", False
     except LLMExhaustedError as exc:
@@ -103,13 +132,18 @@ async def summarize_meeting(session: AsyncSession, meeting: Meeting) -> Summary:
         raise RuntimeError("no transcript segments to summarize")
     names = await active_speaker_names(session, meeting.id)
     lines = render_transcript_lines(segments, names)
+    examples = await load_style_examples(session, meeting.user_id)
 
-    content, model_id, degraded = await _generate_content(lines)
+    content, model_id, degraded = await _generate_content(
+        lines, [e.content for e in examples] or None
+    )
     content["_meta"] = {
         "model": model_id,
         "degraded": degraded,
         "meeting_time": meeting.created_at.isoformat(),
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        # 可追溯：本次纪要模仿了哪些范例（文风调优时对照用）
+        "style_examples": [{"id": str(e.id), "title": e.title} for e in examples],
     }
 
     next_version = (

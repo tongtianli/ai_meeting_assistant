@@ -1,5 +1,7 @@
 # AI Meeting Assistant
 
+[![CI](https://github.com/tongtianli/ai_meeting_assistant/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/tongtianli/ai_meeting_assistant/actions/workflows/ci.yml)
+
 将会议录音自动转化为结构化会议纪要。详见 [PRD v2](docs/PRD_AI_Meeting_Assistant_v2.md)。
 
 ## 技术栈
@@ -134,6 +136,12 @@ curl -X POST -H "$AUTH" http://localhost:8000/api/meetings/{id}/retry
   - 注意：Gemini 免费档数据可能被用于训练，真实敏感会议建议付费档
 - 存储层抽象（`app/services/storage.py`）：MVP 本地磁盘，二期换对象存储
   预签名直传时管道不变
+- 公司纪要文风分两层：第一层为 prompt 内置的硬规则（议题分组、行动式
+  短句、惯用语汇）；第二层为**纪要范例库 few-shot**——前端「纪要范例库」
+  页粘贴优质公司纪要，或在会议详情页把生成效果好的纪要「存为范例」
+  （可再润色）。启用中的范例按更新时间取最新若干条注入摘要 prompt
+  （`SUMMARY_EXAMPLES_MAX_COUNT`/`_MAX_CHARS` 控制预算），本次纪要
+  引用了哪些范例记录在 `_meta.style_examples` 便于对照调优
 
 ## 临时公网分享（ngrok）
 

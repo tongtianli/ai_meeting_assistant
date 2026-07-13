@@ -1,4 +1,5 @@
 import asyncio
+import os
 import wave
 from pathlib import Path
 
@@ -79,6 +80,10 @@ def db_available() -> bool:
         _DB_AVAILABLE = _ensure_test_db()
     return _DB_AVAILABLE
 
+
+if os.environ.get("CI_REQUIRE_DB") and not db_available():
+    # CI 中 Postgres 服务异常时，DB 测试静默跳过会造成假绿灯——直接失败
+    pytest.exit("CI_REQUIRE_DB=1 but the test database is unreachable", returncode=1)
 
 requires_db = pytest.mark.skipif(not db_available(), reason="database not reachable")
 

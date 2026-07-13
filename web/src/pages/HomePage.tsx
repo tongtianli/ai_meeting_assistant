@@ -71,6 +71,9 @@ export default function HomePage() {
       <div className="topbar">
         <h1>会议列表</h1>
         <div>
+          <Link to="/examples" style={{ marginRight: 12 }}>
+            纪要范例库
+          </Link>
           <Link to="/persons" style={{ marginRight: 12 }}>
             人员与声纹
           </Link>

@@ -69,6 +69,10 @@ class Settings(BaseSettings):
 
     # LLM Router（PRD §4：统一 service 抽象；按序尝试，失败降级到下一个）
     llm_providers: str = "gemini,glm"  # 逗号分隔优先级；测试/无 key 联调可用 "mock"
+    # 纪要范例库 few-shot（公司文风第二层）：注入 prompt 的范例数量与总字符预算。
+    # 超预算的范例自动跳过；调大可强化文风模仿，代价是每次摘要的 token 消耗
+    summary_examples_max_count: int = 3
+    summary_examples_max_chars: int = 6000
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     gemini_model: str = "gemini-3.5-flash"
