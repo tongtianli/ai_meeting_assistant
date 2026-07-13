@@ -39,6 +39,27 @@ def create_audio_token(meeting_id: uuid.UUID) -> tuple[str, int]:
     return token, ttl
 
 
+def create_file_token(rel_path: str, ttl_seconds: int) -> str:
+    """签名一个 data_dir 下相对路径的短时访问 token（云端 ASR 拉取音频用）。"""
+    now = int(time.time())
+    return jwt.encode(
+        {"sub": rel_path, "scope": "audio-file", "iat": now, "exp": now + ttl_seconds},
+        settings.auth_secret,
+        algorithm=_ALGORITHM,
+    )
+
+
+def verify_file_token(token: str) -> str | None:
+    """校验文件 token，返回 data_dir 下的相对路径；无效/过期返回 None。"""
+    try:
+        payload = jwt.decode(token, settings.auth_secret, algorithms=[_ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    if payload.get("scope") != "audio-file":
+        return None
+    return payload.get("sub")
+
+
 def verify_audio_token(token: str, meeting_id: uuid.UUID) -> bool:
     try:
         payload = jwt.decode(token, settings.auth_secret, algorithms=[_ALGORITHM])

@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from app.services.asr import SeedASRProvider, get_asr_provider
-from app.services.asr.seedasr import parse_utterances, pick_bitrate
+from app.services.asr.seedasr import (
+    build_audio_field,
+    parse_utterances,
+    pick_bitrate,
+)
 
 
 def test_registered_in_factory() -> None:
@@ -95,6 +99,58 @@ def test_pick_bitrate_adapts_to_duration() -> None:
 def test_pick_bitrate_rejects_overlong_audio() -> None:
     with pytest.raises(RuntimeError, match="too long"):
         pick_bitrate(3 * 3600, 11 * 1024 * 1024)  # 3 小时超出 16kbps 兜底
+
+
+def test_build_audio_field_small_file_uses_base64(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.conftest import make_wav
+
+    wav = make_wav(tmp_path / "small.wav", seconds=1.0)
+    field = asyncio.run(build_audio_field(wav))
+    assert field["format"] == "wav"
+    assert "data" in field and "url" not in field
+
+
+def test_build_audio_field_large_file_prefers_signed_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core.config import settings
+    from app.core.security import verify_file_token
+    from tests.conftest import make_wav
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "seedasr_max_upload_mb", 0)  # 强制超限
+    monkeypatch.setattr(
+        settings, "public_base_url", "https://meeting.example.com/"
+    )
+    wav = make_wav(tmp_path / "transcoded" / "big.wav", seconds=2.0)
+
+    field = asyncio.run(build_audio_field(wav))
+    assert field["format"] == "mp3"
+    assert "data" not in field
+    # URL 指向签名文件路由，token 可验回 data_dir 相对路径
+    prefix = "https://meeting.example.com/api/audio/file/"
+    assert field["url"].startswith(prefix)
+    rel = verify_file_token(field["url"].removeprefix(prefix))
+    assert rel == "transcoded/big.upload.mp3"
+
+
+def test_build_audio_field_no_public_url_falls_back_to_compression(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core.config import settings
+    from tests.conftest import make_wav
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "public_base_url", "")
+    # 2 秒 wav 约 64KB；上限设 0.05MB 触发压缩路径（mp3 后落回限内）
+    monkeypatch.setattr(settings, "seedasr_max_upload_mb", 1)
+    wav = make_wav(tmp_path / "transcoded" / "mid.wav", seconds=120.0)
+    # 120s wav ≈ 3.8MB > 1MB 上限 → 自适应压缩
+    field = asyncio.run(build_audio_field(wav))
+    assert field["format"] == "mp3"
+    assert "data" in field and "url" not in field
 
 
 def test_transcribe_without_config_raises_hint(

@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     seedasr_extra_request: str = ""
     seedasr_poll_interval_seconds: float = 5.0
     seedasr_timeout_seconds: float = 3600.0
+    # 本服务的公网入口（如 Cloudflare 隧道域名）。设置后，超过直传上限的
+    # 音频改走 URL 模式：云端凭短时签名 URL 拉取文件，不再压低码率
+    public_base_url: str = ""
+    # URL 模式签名的有效期：需覆盖任务排队 + 云端拉取的全过程
+    seedasr_url_ttl_seconds: int = 7200
     # 声纹自动绑定的最低置信度（0 = 信任云端阈值，命中即绑定；
     # 返回带 score 时可调高做二次过滤，如 0.6）
     voiceprint_auto_bind_min_confidence: float = 0.0
