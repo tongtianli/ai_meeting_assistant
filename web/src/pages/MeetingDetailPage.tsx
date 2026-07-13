@@ -15,6 +15,7 @@ import {
 import type { Meeting, Segment, Summary } from "../api/types";
 import { PROCESSING_STATUSES } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
+import QaPanel from "../components/QaPanel";
 import SummaryView from "../components/SummaryView";
 import TranscriptView from "../components/TranscriptView";
 
@@ -24,7 +25,7 @@ export default function MeetingDetailPage() {
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [tab, setTab] = useState<"summary" | "transcript">("summary");
+  const [tab, setTab] = useState<"summary" | "transcript" | "qa">("summary");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [currentTime, setCurrentTime] = useState(0);
@@ -174,6 +175,12 @@ export default function MeetingDetailPage() {
             >
               原始转录
             </button>
+            <button
+              className={tab === "qa" ? "active" : ""}
+              onClick={() => setTab("qa")}
+            >
+              AI 问答
+            </button>
             <span style={{ flex: 1 }} />
             <button className="secondary" onClick={() => void saveAsExample()}>
               存为范例
@@ -204,6 +211,7 @@ export default function MeetingDetailPage() {
               onRename={handleRename}
             />
           )}
+          {tab === "qa" && <QaPanel meetingId={id} onSeek={seek} />}
         </>
       )}
     </div>

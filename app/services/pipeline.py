@@ -15,7 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.models import Meeting, MeetingStatus, Person, TranscriptSegment, VoiceSample
+from app.models import (
+    GlossaryTerm,
+    Meeting,
+    MeetingStatus,
+    Person,
+    TranscriptSegment,
+    VoiceSample,
+)
 from app.services.asr import get_asr_provider
 from app.services.speakers import auto_bind_voiceprints
 from app.services.summarize import summarize_meeting
@@ -96,8 +103,21 @@ async def _stage_transcribe(
             )
         )
     )
+    # 全局术语表 → 作为 hotwords 注入（provider 无关，PRD Feature 1）；
+    # FunASR 不做数量上限，在此统一按 glossary_max_terms 截断
+    hotwords = list(
+        await session.scalars(
+            select(GlossaryTerm.term)
+            .where(
+                GlossaryTerm.user_id == meeting.user_id,
+                GlossaryTerm.enabled.is_(True),
+            )
+            .order_by(GlossaryTerm.updated_at.desc())
+            .limit(settings.glossary_max_terms)
+        )
+    )
     result = await get_asr_provider().transcribe(
-        wav_path, voiceprint_ids=vp_ids or None
+        wav_path, voiceprint_ids=vp_ids or None, hotwords=hotwords or None
     )
     if not result.segments:
         raise RuntimeError(

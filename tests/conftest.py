@@ -126,3 +126,4 @@ def _mock_providers(monkeypatch):
     避免真实 ASR 推理与 LLM 网络调用。"""
     monkeypatch.setattr(settings, "llm_providers", "mock")
     monkeypatch.setattr(settings, "asr_provider", "mock")
+    monkeypatch.setattr(settings, "embedding_provider", "mock")

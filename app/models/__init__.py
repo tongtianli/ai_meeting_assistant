@@ -2,6 +2,7 @@ from app.models.action_item import ActionItem
 from app.models.auth_identity import AuthIdentity
 from app.models.chat_message import ChatMessage
 from app.models.enums import AuthIdentityType, ConfirmedBy, MeetingStatus
+from app.models.glossary_term import GlossaryTerm
 from app.models.meeting import Meeting
 from app.models.person import Person
 from app.models.speaker_binding import SpeakerBinding
@@ -18,6 +19,7 @@ __all__ = [
     "ChatMessage",
     "ConfirmedBy",
     "DEFAULT_USER_ID",
+    "GlossaryTerm",
     "Meeting",
     "MeetingStatus",
     "Person",
