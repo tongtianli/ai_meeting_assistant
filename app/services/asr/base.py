@@ -16,6 +16,9 @@ class ASRSegment:
     end_time: float
     speaker_label: str  # 会议内临时标签，如 "speaker_001"
     text: str
+    # 云端声纹匹配命中时回填（跨会议身份，PRD 二期）；未命中为 None
+    voiceprint_id: str | None = None
+    voiceprint_confidence: float | None = None
 
 
 @dataclass
@@ -41,6 +44,13 @@ class ASRProvider(ABC):
 
     @abstractmethod
     async def transcribe(
-        self, audio_path: Path, hotwords: list[str] | None = None
+        self,
+        audio_path: Path,
+        hotwords: list[str] | None = None,
+        voiceprint_ids: list[str] | None = None,
     ) -> ASRResult:
-        """输入 16kHz 单声道 wav；hotwords 为热词/术语表注入机制（PRD Feature 1）。"""
+        """输入 16kHz 单声道 wav；hotwords 为热词/术语表注入机制（PRD Feature 1）。
+
+        voiceprint_ids：已注册的云端声纹 ID 列表，支持声纹匹配的 provider
+        （目前仅 seedasr）据此做跨会议说话人识别；其余 provider 忽略。
+        """

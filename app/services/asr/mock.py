@@ -42,7 +42,10 @@ class MockASRProvider(ASRProvider):
     name = "mock"
 
     async def transcribe(
-        self, audio_path: Path, hotwords: list[str] | None = None
+        self,
+        audio_path: Path,
+        hotwords: list[str] | None = None,
+        voiceprint_ids: list[str] | None = None,
     ) -> ASRResult:
         duration = max(_duration_seconds(audio_path), 0.001 * len(_SCRIPT))
         step = duration / len(_SCRIPT)

@@ -58,6 +58,21 @@ def test_parse_utterances_prefers_voiceprint_name() -> None:
     segments = parse_utterances(payload)
     # 声纹匹配命中：直接用注册名称作为标签（跨会议身份，PRD 二期能力）
     assert segments[0].speaker_label == "Tim"
+    # 命中信息回填，供管道自动绑定 Person
+    assert segments[0].voiceprint_id == "vp-abc"
+    assert segments[0].voiceprint_confidence == 0.92
+
+
+def test_build_request_serializes_voiceprint_list_as_json_string() -> None:
+    import json
+
+    request = SeedASRProvider()._build_request(
+        hotwords=None, voiceprint_ids=["vp-1", "vp-2"]
+    )
+    # 网关 params store 只收字符串（实测），必须 JSON 编码
+    assert json.loads(request["voice_print_list"]) == ["vp-1", "vp-2"]
+    # 未传声纹时不携带该字段
+    assert "voice_print_list" not in SeedASRProvider()._build_request(hotwords=None)
 
 
 def test_parse_utterances_tolerates_empty() -> None:

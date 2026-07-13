@@ -57,15 +57,20 @@ export default function HomePage() {
     <div className="container">
       <div className="topbar">
         <h1>会议列表</h1>
-        <button
-          className="secondary"
-          onClick={() => {
-            clearToken();
-            window.location.hash = "#/login";
-          }}
-        >
-          退出
-        </button>
+        <div>
+          <Link to="/persons" style={{ marginRight: 12 }}>
+            人员与声纹
+          </Link>
+          <button
+            className="secondary"
+            onClick={() => {
+              clearToken();
+              window.location.hash = "#/login";
+            }}
+          >
+            退出
+          </button>
+        </div>
       </div>
 
       <div className="card">

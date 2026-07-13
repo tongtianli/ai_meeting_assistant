@@ -43,7 +43,11 @@ def parse_utterances(payload: dict[str, Any]) -> list[ASRSegment]:
             continue
         additions = utt.get("additions") or {}
         speaker_info = utt.get("speaker_info") or additions.get("speaker_info") or {}
-        vp_name = speaker_info.get("name") if isinstance(speaker_info, dict) else None
+        if not isinstance(speaker_info, dict):
+            speaker_info = {}
+        vp_name = speaker_info.get("name")
+        vp_id = speaker_info.get("id") or speaker_info.get("voice_print_id")
+        vp_score = speaker_info.get("score")
         raw_speaker = additions.get("speaker") or utt.get("speaker") or "0"
         if vp_name:
             label = str(vp_name)
@@ -57,6 +61,8 @@ def parse_utterances(payload: dict[str, Any]) -> list[ASRSegment]:
                 end_time=end / 1000.0,
                 speaker_label=label,
                 text=text,
+                voiceprint_id=str(vp_id) if vp_id else None,
+                voiceprint_confidence=float(vp_score) if vp_score is not None else None,
             )
         )
     segments.sort(key=lambda s: (s.start_time, s.end_time))
@@ -145,7 +151,11 @@ class SeedASRProvider(ASRProvider):
             "Content-Type": "application/json",
         }
 
-    def _build_request(self, hotwords: list[str] | None) -> dict[str, Any]:
+    def _build_request(
+        self,
+        hotwords: list[str] | None,
+        voiceprint_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         request: dict[str, Any] = {
             "model_name": "bigmodel",
             "enable_itn": True,
@@ -153,6 +163,10 @@ class SeedASRProvider(ASRProvider):
             "enable_speaker_info": True,  # 说话人分离
             "show_utterances": True,  # 分句 + 时间戳
         }
+        if voiceprint_ids:
+            # 网关的 params store 只收字符串（实测数组直接被拒），故 JSON 编码；
+            # 无效 ID 会被云端静默忽略（实测），不会导致任务失败
+            request["voice_print_list"] = json.dumps(voiceprint_ids)
         if hotwords:
             # 热词注入（PRD Feature 1）；2.0 上下文机制字段以控制台示例为准
             request["corpus"] = {"context": json.dumps(
@@ -171,7 +185,10 @@ class SeedASRProvider(ASRProvider):
         return resp.headers.get("X-Api-Status-Code", "")
 
     async def transcribe(
-        self, audio_path: Path, hotwords: list[str] | None = None
+        self,
+        audio_path: Path,
+        hotwords: list[str] | None = None,
+        voiceprint_ids: list[str] | None = None,
     ) -> ASRResult:
         if not (settings.volc_app_key and settings.volc_access_key):
             raise RuntimeError(_CONFIG_HINT)
@@ -184,7 +201,7 @@ class SeedASRProvider(ASRProvider):
                 "format": audio_format,
                 "data": base64.b64encode(audio_bytes).decode(),
             },
-            "request": self._build_request(hotwords),
+            "request": self._build_request(hotwords, voiceprint_ids),
         }
 
         # trust_env=False：不继承终端的 http(s)_proxy —— 字节端点国内直连即可，

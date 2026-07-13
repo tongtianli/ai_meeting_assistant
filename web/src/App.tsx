@@ -3,6 +3,7 @@ import { getToken } from "./api/client";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import MeetingDetailPage from "./pages/MeetingDetailPage";
+import PersonsPage from "./pages/PersonsPage";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   return getToken() ? children : <Navigate to="/login" replace />;
@@ -26,6 +27,14 @@ export default function App() {
           element={
             <RequireAuth>
               <MeetingDetailPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/persons"
+          element={
+            <RequireAuth>
+              <PersonsPage />
             </RequireAuth>
           }
         />

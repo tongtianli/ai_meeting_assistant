@@ -156,7 +156,10 @@ class TingwuProvider(ASRProvider):
         return data.get("Data") or {}
 
     async def transcribe(
-        self, audio_path: Path, hotwords: list[str] | None = None
+        self,
+        audio_path: Path,
+        hotwords: list[str] | None = None,
+        voiceprint_ids: list[str] | None = None,  # 听悟无声纹库能力，忽略
     ) -> ASRResult:
         self._check_config()
         file_url = await asyncio.to_thread(self._upload_to_oss, audio_path)

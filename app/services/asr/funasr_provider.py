@@ -113,7 +113,10 @@ class FunASRProvider(ASRProvider):
         return cls._pipeline, cls._spk_encoder
 
     async def transcribe(
-        self, audio_path: Path, hotwords: list[str] | None = None
+        self,
+        audio_path: Path,
+        hotwords: list[str] | None = None,
+        voiceprint_ids: list[str] | None = None,  # 本地路线无云端声纹，忽略
     ) -> ASRResult:
         # 推理是重 CPU 任务，放线程池避免阻塞事件循环
         return await asyncio.to_thread(self._transcribe_sync, audio_path, hotwords)
