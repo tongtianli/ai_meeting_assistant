@@ -36,7 +36,27 @@ export default function SummaryView({ summary, segments, onSeek }: Props) {
       <h3>会议总结</h3>
       <p>{c.summary}</p>
 
-      {!!c.discussions?.length && (
+      {!!c.topics?.length &&
+        c.topics.map((t, i) => (
+          <div key={i}>
+            <h3>
+              {t.title}
+              {t.owner && (
+                <span className="muted" style={{ fontSize: "0.8em", marginLeft: 8 }}>
+                  责任人：{t.owner}
+                </span>
+              )}
+            </h3>
+            <ol>
+              {t.items.map((item, j) => (
+                <li key={j}>{item}</li>
+              ))}
+            </ol>
+          </div>
+        ))}
+
+      {/* 旧版纪要（无议题分组）兼容展示 */}
+      {!c.topics?.length && !!c.discussions?.length && (
         <>
           <h3>讨论事项</h3>
           <ol>

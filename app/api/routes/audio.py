@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import verify_audio_token
+from app.core.config import settings
+from app.core.security import verify_audio_token, verify_file_token
 from app.db.session import get_db
 from app.models import Meeting
 from app.services.storage import get_audio_storage
@@ -22,6 +23,22 @@ _MEDIA_TYPES = {
     ".m4a": "audio/mp4",
     ".mp4": "video/mp4",
 }
+
+
+@router.get("/file/{token}")
+async def stream_signed_file(token: str) -> FileResponse:
+    """凭签名 token 回源 data_dir 下的派生文件（云端 ASR 经公网拉取音频）。"""
+    rel = verify_file_token(token)
+    if rel is None:
+        raise HTTPException(status_code=403, detail="invalid or expired file token")
+    base = settings.data_dir.resolve()
+    path = (base / rel).resolve()
+    # token 由我们自己签发，此处防御路径穿越纯属纵深
+    if not path.is_relative_to(base) or not path.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(
+        path, media_type=_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    )
 
 
 @router.get("/{meeting_id}")

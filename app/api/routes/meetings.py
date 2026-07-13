@@ -52,6 +52,10 @@ async def create_meeting(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: str = Form(...),
+    location: str | None = Form(None),
+    host: str | None = Form(None),
+    recorder: str | None = Form(None),
+    importance: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(require_user),
 ) -> Meeting:
@@ -72,6 +76,10 @@ async def create_meeting(
         title=title,
         status=MeetingStatus.uploaded,
         audio_url=audio_url,
+        location=location or None,
+        host=host or None,
+        recorder=recorder or None,
+        importance=importance or None,
     )
     db.add(meeting)
     await db.commit()
@@ -264,7 +272,7 @@ async def export_word(
     _: UUID = Depends(require_user),
 ) -> Response:
     """Word 导出：最新版纪要实时渲染（PRD Feature 6，纯程序步骤）。"""
-    await _get_meeting_or_404(db, meeting_id)
+    meeting = await _get_meeting_or_404(db, meeting_id)
     summary = await db.scalar(
         select(Summary)
         .where(Summary.meeting_id == meeting_id)
@@ -281,7 +289,7 @@ async def export_word(
         .outerjoin(Person, Person.id == TranscriptSegment.person_id)
         .where(ActionItem.meeting_id == meeting_id)
     )
-    content = build_context(summary.content_json, list(rows))
+    content = build_context(summary.content_json, list(rows), meeting)
     payload = render_summary_docx(content)
     filename = f"minutes-{meeting_id}-v{summary.version}.docx"
     return Response(

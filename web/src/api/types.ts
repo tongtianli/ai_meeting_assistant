@@ -12,6 +12,10 @@ export interface Meeting {
   status: MeetingStatus;
   duration: number | null;
   error_message: string | null;
+  location: string | null;
+  host: string | null;
+  recorder: string | null;
+  importance: string | null;
   created_at: string;
 }
 
@@ -37,11 +41,18 @@ export interface TodoItem {
   source_segment_seq: number | null;
 }
 
+export interface TopicGroup {
+  title: string;
+  owner: string | null;
+  items: string[];
+}
+
 export interface SummaryContent {
   title?: string;
   participants?: string[];
   summary?: string;
-  discussions?: string[];
+  topics?: TopicGroup[]; // 新版：议题分组（公司纪要格式）
+  discussions?: string[]; // 旧版纪要兼容
   decisions?: string[];
   todos?: TodoItem[];
   text?: string; // 降级纯文本

@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.core.security import create_file_token
 from app.services.asr.base import ASRProvider, ASRResult, ASRSegment
 from app.services.transcode import TranscodeError
 
@@ -101,14 +102,8 @@ def pick_bitrate(duration_seconds: float, limit_bytes: int) -> int:
     return min(64_000, bitrate)
 
 
-async def _compress_if_needed(audio_path: Path) -> tuple[bytes, str]:
-    """超过直传上限的音频压成单声道 mp3，码率按时长自适应。"""
-    data = audio_path.read_bytes()
-    limit = settings.seedasr_max_upload_mb * 1024 * 1024
-    if len(data) <= limit:
-        return data, audio_path.suffix.lstrip(".").lower() or "wav"
-    duration = await _probe_duration_seconds(audio_path)
-    bitrate = pick_bitrate(duration, limit)
+async def _compress(audio_path: Path, bitrate: int) -> Path:
+    """压成指定码率的单声道 mp3，返回产物路径。"""
     mp3_path = audio_path.with_suffix(".upload.mp3")
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-y", "-i", str(audio_path), "-ac", "1",
@@ -122,6 +117,40 @@ async def _compress_if_needed(audio_path: Path) -> tuple[bytes, str]:
         raise TranscodeError(
             f"compress for upload failed: {stderr.decode(errors='replace')[-300:]}"
         )
+    return mp3_path
+
+
+async def build_audio_field(audio_path: Path) -> dict[str, str]:
+    """构造 submit 的 audio 字段：直传 base64 或公网签名 URL。
+
+    - ≤ 直传上限：原样 base64（最快，不依赖公网入口）
+    - 超限且配置了 public_base_url：64kbps mp3 + 签名 URL，云端自行拉取
+      （音质不降档，时长无上限——URL 模式没有 16MB 网关限制）
+    - 超限且无公网入口：按时长自适应降码率后 base64（约 90 分钟封顶）
+    """
+    size = audio_path.stat().st_size
+    limit = settings.seedasr_max_upload_mb * 1024 * 1024
+    if size <= limit:
+        return {
+            "format": audio_path.suffix.lstrip(".").lower() or "wav",
+            "data": base64.b64encode(audio_path.read_bytes()).decode(),
+        }
+
+    if settings.public_base_url:
+        mp3_path = await _compress(audio_path, 64_000)
+        rel = mp3_path.resolve().relative_to(settings.data_dir.resolve())
+        token = create_file_token(str(rel), settings.seedasr_url_ttl_seconds)
+        url = f"{settings.public_base_url.rstrip('/')}/api/audio/file/{token}"
+        logger.info(
+            "seedasr: %s (%.1fMB) exceeds direct-upload limit, "
+            "submitting signed URL (%.1fMB mp3)",
+            audio_path.name, size / 1e6, mp3_path.stat().st_size / 1e6,
+        )
+        return {"format": "mp3", "url": url}
+
+    duration = await _probe_duration_seconds(audio_path)
+    bitrate = pick_bitrate(duration, limit)
+    mp3_path = await _compress(audio_path, bitrate)
     compressed = mp3_path.read_bytes()
     if len(compressed) > limit:
         raise RuntimeError(
@@ -130,12 +159,9 @@ async def _compress_if_needed(audio_path: Path) -> tuple[bytes, str]:
         )
     logger.info(
         "seedasr: compressed %s (%.1fMB) -> mp3 %dkbps (%.1fMB) for upload",
-        audio_path.name,
-        len(data) / 1e6,
-        bitrate // 1000,
-        len(compressed) / 1e6,
+        audio_path.name, size / 1e6, bitrate // 1000, len(compressed) / 1e6,
     )
-    return compressed, "mp3"
+    return {"format": "mp3", "data": base64.b64encode(compressed).decode()}
 
 
 class SeedASRProvider(ASRProvider):
@@ -193,14 +219,11 @@ class SeedASRProvider(ASRProvider):
         if not (settings.volc_app_key and settings.volc_access_key):
             raise RuntimeError(_CONFIG_HINT)
 
-        audio_bytes, audio_format = await _compress_if_needed(audio_path)
+        audio_field = await build_audio_field(audio_path)
         request_id = str(uuid.uuid4())
         submit_body = {
             "user": {"uid": "ai-meeting-assistant"},
-            "audio": {
-                "format": audio_format,
-                "data": base64.b64encode(audio_bytes).decode(),
-            },
+            "audio": audio_field,
             "request": self._build_request(hotwords, voiceprint_ids),
         }
 

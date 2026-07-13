@@ -9,6 +9,10 @@ import StatusBadge from "../components/StatusBadge";
 export default function HomePage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [title, setTitle] = useState("");
+  const [location, setLocation] = useState("");
+  const [host, setHost] = useState("");
+  const [recorder, setRecorder] = useState("");
+  const [importance, setImportance] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -42,8 +46,17 @@ export default function HomePage() {
     setBusy(true);
     setError("");
     try {
-      await uploadMeeting(title || file.name, file);
+      await uploadMeeting(title || file.name, file, {
+        location,
+        host,
+        recorder,
+        importance,
+      });
       setTitle("");
+      setLocation("");
+      setHost("");
+      setRecorder("");
+      setImportance("");
       if (fileRef.current) fileRef.current.value = "";
       await refresh();
     } catch (err) {
@@ -86,9 +99,40 @@ export default function HomePage() {
             <input ref={fileRef} type="file" accept=".mp3,.wav,.m4a,.mp4" required />
             <button disabled={busy}>{busy ? "上传中…" : "上传"}</button>
           </div>
+          <div className="form-row" style={{ marginTop: 8 }}>
+            <input
+              type="text"
+              placeholder="会议地点（选填）"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+            />
+            <input
+              type="text"
+              placeholder="主持人（选填）"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+            />
+            <input
+              type="text"
+              placeholder="记录人（选填）"
+              value={recorder}
+              onChange={(e) => setRecorder(e.target.value)}
+            />
+            <select
+              value={importance}
+              onChange={(e) => setImportance(e.target.value)}
+            >
+              <option value="">重要程度（选填）</option>
+              <option value="一般">一般</option>
+              <option value="重要">重要</option>
+              <option value="加急">加急</option>
+            </select>
+          </div>
         </form>
         {error && <div className="error">{error}</div>}
-        <div className="muted">支持 mp3 / wav / m4a / mp4</div>
+        <div className="muted">
+          支持 mp3 / wav / m4a / mp4；抬头选填项留空时导出 Word 留白手写
+        </div>
       </div>
 
       <div className="card">
