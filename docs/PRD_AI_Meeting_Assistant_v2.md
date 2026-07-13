@@ -141,12 +141,14 @@ Word 导出（用户点击时由程序用模板实时渲染，不占管道）
 
 实现：segments embedding 入 pgvector → 检索相关 segment → LLM 回答，回答强制携带 cited_segment_ids，前端据此渲染原文对照与音频跳转。
 
+> 现状：内容查询与原文引用已实现（pgvector 检索 + LLM 引用 segment，前端引用跳播）；「修改纪要」见 §7.1。
+
 ### Feature 6：Word 自动生成
 
 - 输入：Summary 的结构化 JSON（content_json）
 - 输出：Word 文件（公司固定模板、表格填充、标题格式）
 - 实现：docxtpl 填模板，纯程序步骤，与 LLM 完全解耦；用户点击导出时实时渲染
-- Summary 版本化：二期通过聊天修改纪要时生成新版本而非覆盖
+- Summary 版本化：二期通过聊天修改纪要时生成新版本而非覆盖（复用 summarize 的 max(version)+1；改纪要须同步重建 ActionItem 以保证 Word 导出一致）
 
 ### Feature 7：前端应用
 
@@ -279,11 +281,55 @@ id, meeting_id, role, content, cited_segment_ids, created_at
 
 ## 7. 第二阶段规划
 
-- **AI 聊天**：查询会议内容、修改纪要（Summary 新版本）、原文引用
-- **声纹记忆**：三档置信度匹配、人工确认流、绑定回滚、合规同意流程
-- **RAG 知识库**：跨会议搜索、历史决策查询、纪要风格 RAG
-- **微信小程序**：微信登录（AuthIdentity 加 type）、订阅消息通知、小程序录音格式接入
-- **任务队列升级**：BackgroundTasks → Celery + Redis
+> 标注现状：✅ 已实现 / 🟡 部分 / ⬜ 待建。步骤以当前代码为基线，尽量复用既有件。
+
+### 7.1 AI 聊天
+- **查询会议内容（✅ 已实现）**：RAG 问答，pgvector 检索相关 segment → LLM 回答。
+  见 `app/services/qa.py`、`app/api/routes/chat.py`。
+- **原文引用（✅ 已实现）**：LLM 引用 segment 编号（seq），程序反查真实 segment
+  落 `chat_messages.cited_segment_ids`，前端引用 chip 点击跳播。
+- **修改纪要 → Summary 新版本（⬜ 待建，本期重点）**：在同一聊天框内用自然语言
+  指令改纪要（如「把决策第二条改成…」「合并前两个议题」），生成新版本而非覆盖。
+  实现步骤：
+  1. 意图路由：聊天 POST 先用一次轻量 LLM 分类 `query | edit`（复用 `build_router`，
+     结构化输出 `{intent}`）。`query` 走现有 `answer_question`；`edit` 走改纪要分支。
+     （备选：前端加「编辑纪要」显式开关，避免误分类——若分类不稳再切换。）
+  2. 改纪要分支：取该会议最新 Summary 的 `content_json` + 用户指令，
+     （可选）附相关 segment 做依据 → LLM 产出完整新 `content_json`，
+     经 `SummaryContent` schema 校验（复用 `app/schemas/summary.py`）。
+  3. 落库新版本：复用 `summarize.py` 的 `max(version)+1` 模式写入 Summary；
+     `_meta` 记来源（如 `{"origin":"chat","edit_instruction":…}`）。
+  4. 重建 ActionItem：像 `summarize_meeting` 一样 delete+重插本会议 ActionItem
+     （seq→segment 反查 owner/source），否则 Word 导出 TODO 表与新纪要不一致。
+  5. 聊天回执：assistant 消息说明改了什么并标注新版本号；
+     （可选）`chat_messages` 加 `summary_version` 列记录该轮产出的版本（需迁移，审计用）。
+  6. 前端：`QaPanel` 增 `onSummaryUpdated` 回调 → `MeetingDetailPage.refresh` 重拉
+     `getSummary`，使纪要 tab 即时反映新版本（现有 done 后不再轮询，须显式刷新）。
+- **版本历史 / 回滚（⬜ 增强，可选）**：`GET /summary` 目前只返回最新版。
+  如需历史与回滚，加 `GET /meetings/{id}/summary/versions` 与 `?version=N`，
+  回滚 = 复制旧版内容为新版本（仍不覆盖）。
+
+### 7.2 声纹记忆（🟡 部分）
+- 已实现：SeedASR 声纹匹配命中自动绑定（`auto_bind_voiceprints`）、Person 声纹登记、
+  删除 Person 云端清理提示。
+- 待建：三档置信度流（高置信自动绑 / 中置信「待人工确认」队列 + 确认 UI /
+  低置信新建 Person 或标记未知）；绑定回滚 UI（SpeakerBinding 已是追加式可回滚，
+  补前端）；合规同意流（`Person.consent_record` 已有字段，补录入/展示）。
+
+### 7.3 RAG 知识库（⬜ 待建）
+- 跨会议搜索：现有 segment embedding 检索限定单会议；放开 meeting_id 约束、
+  按 user 检索全部会议，答案标注来源会议+时间戳。
+- 历史决策查询、纪要风格 RAG：纪要范例库（summary_examples）已按 few-shot 注入；
+  二期可将历史纪要 embedding 化做检索式风格参照。
+
+### 7.4 微信小程序（⬜ 待建）
+- 微信登录：AuthIdentity 已预留 `type=wechat_unionid`，补 UnionID 换 JWT 流。
+- 订阅消息通知：管道状态变更事件已是内部信号，补微信订阅消息订阅者。
+- 录音格式：转码入口（`transcode.py`）扩 aac 等小程序格式。
+
+### 7.5 任务队列升级（⬜ 待建）
+- BackgroundTasks → Celery + Redis：管道阶段划分不变（`run_pipeline` 各阶段幂等），
+  换执行器即可；换后移除启动时「in-flight 标 failed」的兜底（`app/main.py` lifespan）。
 
 ## 8. 第三阶段规划（企业级）
 
