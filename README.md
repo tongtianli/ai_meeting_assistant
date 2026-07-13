@@ -1,5 +1,7 @@
 # AI Meeting Assistant
 
+[![CI](https://github.com/tongtianli/ai_meeting_assistant/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/tongtianli/ai_meeting_assistant/actions/workflows/ci.yml)
+
 将会议录音自动转化为结构化会议纪要。详见 [PRD v2](docs/PRD_AI_Meeting_Assistant_v2.md)。
 
 ## 技术栈
