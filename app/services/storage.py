@@ -24,6 +24,10 @@ class AudioStorage(ABC):
     def resolve(self, audio_url: str) -> Path:
         """将 audio_url 解析为本地可读路径。"""
 
+    @abstractmethod
+    def delete(self, audio_url: str) -> None:
+        """删除音频（用户显式删除会议时触发，PRD §9.4）；幂等。"""
+
 
 class LocalAudioStorage(AudioStorage):
     def __init__(self, root: Path) -> None:
@@ -41,6 +45,9 @@ class LocalAudioStorage(AudioStorage):
         if not audio_url.startswith(_SCHEME):
             raise ValueError(f"unsupported audio_url: {audio_url!r}")
         return self.root / audio_url.removeprefix(_SCHEME)
+
+    def delete(self, audio_url: str) -> None:
+        self.resolve(audio_url).unlink(missing_ok=True)
 
 
 def get_audio_storage() -> AudioStorage:

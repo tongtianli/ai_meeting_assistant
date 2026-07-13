@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { clearToken } from "../api/client";
-import { listMeetings, uploadMeeting } from "../api/meetings";
+import { deleteMeeting, listMeetings, uploadMeeting } from "../api/meetings";
 import type { Meeting } from "../api/types";
 import { PROCESSING_STATUSES } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
@@ -38,6 +38,18 @@ export default function HomePage() {
     const timer = setInterval(refresh, 3000);
     return () => clearInterval(timer);
   }, [hasProcessing, refresh]);
+
+  async function remove(m: Meeting) {
+    if (!window.confirm(`删除会议「${m.title}」？音频、转录、纪要将一并永久删除，无法恢复。`))
+      return;
+    setError("");
+    try {
+      await deleteMeeting(m.id);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除失败");
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -146,6 +158,7 @@ export default function HomePage() {
               <th>状态</th>
               <th>时长</th>
               <th>创建时间</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -159,11 +172,16 @@ export default function HomePage() {
                 </td>
                 <td>{m.duration ? `${Math.round(m.duration / 60)} 分钟` : "—"}</td>
                 <td>{new Date(m.created_at).toLocaleString()}</td>
+                <td>
+                  <button className="danger" onClick={() => remove(m)}>
+                    删除
+                  </button>
+                </td>
               </tr>
             ))}
             {meetings.length === 0 && (
               <tr>
-                <td colSpan={4} className="muted">
+                <td colSpan={5} className="muted">
                   还没有会议，上传第一段录音吧
                 </td>
               </tr>
