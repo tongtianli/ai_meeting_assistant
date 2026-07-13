@@ -83,6 +83,9 @@ export default function HomePage() {
       <div className="topbar">
         <h1>会议列表</h1>
         <div>
+          <Link to="/glossary" style={{ marginRight: 12 }}>
+            术语表
+          </Link>
           <Link to="/examples" style={{ marginRight: 12 }}>
             纪要范例库
           </Link>

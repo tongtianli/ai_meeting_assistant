@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # 超预算的范例自动跳过；调大可强化文风模仿，代价是每次摘要的 token 消耗
     summary_examples_max_count: int = 3
     summary_examples_max_chars: int = 6000
+    # 全局术语表注入 ASR 的热词数量上限（对齐 SeedASR/听悟的 100 上限；
+    # FunASR 不做数量限制，故在管道侧统一截断，见 pipeline._stage_transcribe）
+    glossary_max_terms: int = 100
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     gemini_model: str = "gemini-3.5-flash"
