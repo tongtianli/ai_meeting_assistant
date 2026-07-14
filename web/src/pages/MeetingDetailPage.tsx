@@ -211,7 +211,9 @@ export default function MeetingDetailPage() {
               onRename={handleRename}
             />
           )}
-          {tab === "qa" && <QaPanel meetingId={id} onSeek={seek} />}
+          {tab === "qa" && (
+            <QaPanel meetingId={id} onSeek={seek} onSummaryUpdated={refresh} />
+          )}
         </>
       )}
     </div>

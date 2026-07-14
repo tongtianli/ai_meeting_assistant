@@ -13,22 +13,37 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models import ChatMessage, Meeting, TranscriptSegment
-from app.schemas.chat import CitationOut, QaAnswer
+from app.schemas.chat import CitationOut, IntentOut, QaAnswer
 from app.services.embeddings import get_embedder
 from app.services.llm import LLMExhaustedError, build_router
-from app.services.llm.prompts import SYSTEM_QA, qa_prompt
+from app.services.llm.prompts import SYSTEM_INTENT, SYSTEM_QA, intent_prompt, qa_prompt
 from app.services.speakers import active_speaker_names
 from app.services.summarize import _fmt_ts
+from app.services.summary_edit import NoSummaryYet, edit_summary
 
 logger = logging.getLogger(__name__)
 
 _NO_ANSWER = "未在本次会议记录中找到相关内容。"
+_EDIT_FAILED = "纪要修改失败，请调整指令后重试。"
 
 
 @dataclass
 class QaResult:
     assistant: ChatMessage
     citations: list[CitationOut]
+    summary_version: int | None = None
+
+
+async def classify_intent(message: str) -> str:
+    """聊天意图路由（PRD §7.1）；分类失败一律回退 query（查询无副作用）。"""
+    try:
+        parsed, _ = await build_router().generate_json(
+            SYSTEM_INTENT, intent_prompt(message), IntentOut
+        )
+        return parsed.intent
+    except LLMExhaustedError as exc:
+        logger.warning("intent classification failed, fallback to query: %s", exc)
+        return "query"
 
 
 async def _all_segments(
@@ -118,15 +133,50 @@ async def resolve_citations(
     return out
 
 
-async def answer_question(
+async def handle_chat(
     session: AsyncSession, meeting: Meeting, question: str
 ) -> QaResult:
-    segments = await _all_segments(session, meeting.id)
-    # 先落库用户问题（早于 LLM 调用，且 created_at 严格早于稍后的 assistant
-    # 回答——保证历史里同一轮 user 在 assistant 之前）
+    """聊天入口：先落库用户消息，按意图路由到查询或改纪要（PRD §7.1）。
+
+    用户消息先于 LLM 调用单独 commit——created_at 严格早于 assistant 回复，
+    且慢调用失败时问题本身不丢。
+    """
     session.add(ChatMessage(meeting_id=meeting.id, role="user", content=question))
     await session.commit()
 
+    if await classify_intent(question) == "edit":
+        return await _handle_edit(session, meeting, question)
+    return await _answer_question(session, meeting, question)
+
+
+async def _handle_edit(
+    session: AsyncSession, meeting: Meeting, instruction: str
+) -> QaResult:
+    meeting_id = meeting.id  # rollback 会使 ORM 属性过期，先取成普通值
+    version: int | None = None
+    try:
+        summary, note = await edit_summary(session, meeting, instruction)
+        content = f"已生成纪要新版本 v{summary.version}：{note}"
+        version = summary.version
+    except NoSummaryYet as exc:
+        content = str(exc)
+    except LLMExhaustedError as exc:
+        logger.warning("summary edit LLM exhausted for %s: %s", meeting_id, exc)
+        await session.rollback()  # 防御：丢弃半途的未提交改动
+        content = _EDIT_FAILED
+    assistant = ChatMessage(
+        meeting_id=meeting_id, role="assistant", content=content
+    )
+    session.add(assistant)
+    await session.commit()
+    await session.refresh(assistant)
+    return QaResult(assistant=assistant, citations=[], summary_version=version)
+
+
+async def _answer_question(
+    session: AsyncSession, meeting: Meeting, question: str
+) -> QaResult:
+    segments = await _all_segments(session, meeting.id)
     embedder = get_embedder()
     qvec = (await embedder.embed([question]))[0]
     await ensure_embeddings(session, segments, expected_dim=len(qvec))

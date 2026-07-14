@@ -125,3 +125,35 @@ def qa_prompt(question: str, segment_lines: str) -> str:
         f"{segment_lines}\n\n问题：{question}\n\n"
         f"请依据上述片段回答。{_QA_SCHEMA_DESC}"
     )
+
+
+# 聊天意图路由（PRD §7.1 步骤 1）。"意图分类器" 是稳定标记，供 mock 识别。
+SYSTEM_INTENT = (
+    "你是一个意图分类器。你只输出合法的 JSON 对象。"
+    "判断用户在会议助手聊天框里发的这条消息意图："
+    "查询会议内容（query）还是要求修改会议纪要（edit）。"
+    '输出 {"intent": "query"} 或 {"intent": "edit"}。'
+    "只有明确要求改动纪要内容（增删改措辞、合并议题、调整 TODO 等）才算 edit；"
+    "提问、追溯、总结类一律 query。"
+)
+
+
+def intent_prompt(message: str) -> str:
+    return f"用户消息：{message}"
+
+
+# 聊天改纪要（PRD §7.1 步骤 2）。"纪要编辑器" 是稳定标记，供 mock 识别。
+SYSTEM_SUMMARY_EDIT = (
+    "你是一名会议纪要编辑器。你只输出合法的 JSON 对象，不输出 markdown 或其他内容。"
+    "根据用户指令在现有纪要基础上修改：只改动指令涉及的部分，"
+    "未提及的内容必须原样保留（含 source_segment_seq 引用）；"
+    "不得虚构会议中未出现的信息。"
+)
+
+
+def summary_edit_prompt(current_json: str, instruction: str) -> str:
+    return (
+        f"现有会议纪要（JSON）：\n\n{current_json}\n\n"
+        f"用户修改指令：{instruction}\n\n"
+        f"请输出修改后的完整纪要。{_SCHEMA_DESC}\n\n{_STYLE_RULES}"
+    )

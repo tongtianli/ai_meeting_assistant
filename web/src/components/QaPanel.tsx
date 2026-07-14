@@ -12,9 +12,10 @@ function fmt(seconds: number): string {
 interface Props {
   meetingId: string;
   onSeek: (seconds: number) => void;
+  onSummaryUpdated?: () => void;
 }
 
-export default function QaPanel({ meetingId, onSeek }: Props) {
+export default function QaPanel({ meetingId, onSeek, onSummaryUpdated }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -54,8 +55,9 @@ export default function QaPanel({ meetingId, onSeek }: Props) {
     setMessages((prev) => [...prev, optimistic]);
     setInput("");
     try {
-      await askQuestion(meetingId, q);
+      const reply = await askQuestion(meetingId, q);
       await refresh(); // 拉回权威历史（含 assistant 回答与引用）
+      if (reply.summary_version != null) onSummaryUpdated?.(); // 纪要已改版，通知父级重拉
     } catch (err) {
       setError(err instanceof Error ? err.message : "提问失败");
       await refresh();
@@ -67,8 +69,8 @@ export default function QaPanel({ meetingId, onSeek }: Props) {
   return (
     <div className="card">
       <div className="muted" style={{ marginBottom: 12 }}>
-        基于本次会议转录内容问答，回答附带原文引用（点击时间戳跳转播放）。
-        仅依据会议记录作答，不引入外部知识。
+        基于本次会议转录内容问答，回答附带原文引用（点击时间戳跳转播放）；
+        也可以用自然语言修改纪要（如「把决策第二条改成…」），将生成新版本。
       </div>
 
       <div className="qa-messages">
@@ -105,7 +107,7 @@ export default function QaPanel({ meetingId, onSeek }: Props) {
       <form onSubmit={submit} className="form-row" style={{ marginTop: 12 }}>
         <input
           type="text"
-          placeholder="就本次会议内容提问…"
+          placeholder="提问，或让我修改纪要…"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           disabled={busy}
