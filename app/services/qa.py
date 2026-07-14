@@ -86,19 +86,48 @@ async def ensure_embeddings(
     )
 
 
+def match_speaker_person_ids(
+    names: dict[str, tuple[uuid.UUID, str]], question: str
+) -> list[uuid.UUID]:
+    """问题文本中出现的绑定真名 → person_id（子串匹配，去重）。
+
+    仅匹配 ≥2 字符的名字，单字名撞普通字的概率太高；误匹配只会
+    多带几段候选（只增召回不减召回），代价可接受。
+    """
+    matched: list[uuid.UUID] = []
+    for pid, name in dict(names.values()).items():
+        if len(name) >= 2 and name in question and pid not in matched:
+            matched.append(pid)
+    return matched
+
+
 async def _retrieve(
-    session: AsyncSession, meeting_id: uuid.UUID, qvec: list[float], k: int
+    session: AsyncSession,
+    meeting_id: uuid.UUID,
+    qvec: list[float],
+    k: int,
+    person_ids: list[uuid.UUID] | None = None,
 ) -> list[TranscriptSegment]:
-    rows = await session.scalars(
-        select(TranscriptSegment)
-        .where(
-            TranscriptSegment.meeting_id == meeting_id,
-            TranscriptSegment.embedding.is_not(None),
-        )
-        .order_by(TranscriptSegment.embedding.cosine_distance(qvec))
-        .limit(k)
+    """向量相似度 top-k；问题命中说话人真名时并入该说话人的片段。
+
+    说话人名字不在 embedding 里（只嵌纯文本），按人名提问需要结构化
+    过滤补召回：person_id 在绑定时已物化到 segment，直接 WHERE 命中。
+    """
+    base = select(TranscriptSegment).where(
+        TranscriptSegment.meeting_id == meeting_id,
+        TranscriptSegment.embedding.is_not(None),
     )
-    return list(rows)
+    order = TranscriptSegment.embedding.cosine_distance(qvec)
+    rows = list(await session.scalars(base.order_by(order).limit(k)))
+    if person_ids:
+        boosted = await session.scalars(
+            base.where(TranscriptSegment.person_id.in_(person_ids))
+            .order_by(order)
+            .limit(settings.qa_speaker_top_k)
+        )
+        seen = {s.id for s in rows}
+        rows.extend(s for s in boosted if s.id not in seen)
+    return rows
 
 
 async def resolve_citations(
@@ -181,8 +210,14 @@ async def _answer_question(
     qvec = (await embedder.embed([question]))[0]
     await ensure_embeddings(session, segments, expected_dim=len(qvec))
 
-    retrieved = await _retrieve(session, meeting.id, qvec, settings.qa_top_k)
     names = await active_speaker_names(session, meeting.id)
+    retrieved = await _retrieve(
+        session,
+        meeting.id,
+        qvec,
+        settings.qa_top_k,
+        person_ids=match_speaker_person_ids(names, question),
+    )
     seg_by_seq = {s.seq: s for s in retrieved}
 
     citations: list[CitationOut] = []
