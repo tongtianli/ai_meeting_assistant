@@ -90,7 +90,8 @@ class Settings(BaseSettings):
     gemini_embedding_model: str = "text-embedding-004"
     embedding_batch_size: int = 32
     qa_top_k: int = 6  # 每次提问检索的 segment 数
-    # 问题命中说话人真名时，额外并入该说话人的片段数（说话人感知混合检索）
+    # 问题命中说话人真名时，额外并入的片段数（说话人感知混合检索，
+    # 每位命中的说话人独立取 top-k，多人同问不互相挤占）
     qa_speaker_top_k: int = 6
 
 

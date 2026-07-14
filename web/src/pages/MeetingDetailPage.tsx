@@ -29,6 +29,7 @@ export default function MeetingDetailPage() {
   const [tab, setTab] = useState<"summary" | "transcript" | "qa">("summary");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [resummarizing, setResummarizing] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [audioSrc, setAudioSrc] = useState("");
@@ -87,11 +88,14 @@ export default function MeetingDetailPage() {
   async function handleResummarize() {
     setError("");
     setNotice("");
+    setResummarizing(true); // 请求期间禁用按钮：服务端有原子锁，前端少发重复请求
     try {
       await resummarizeMeeting(id);
       await refresh(); // 状态已置 summarizing，轮询接管直至新版纪要就绪
     } catch (err) {
       setError(err instanceof Error ? err.message : "重新生成纪要失败");
+    } finally {
+      setResummarizing(false);
     }
   }
 
@@ -203,9 +207,10 @@ export default function MeetingDetailPage() {
             <span style={{ flex: 1 }} />
             <button
               className="secondary"
+              disabled={resummarizing}
               onClick={() => void handleResummarize()}
             >
-              重新生成纪要
+              {resummarizing ? "正在重新生成…" : "重新生成纪要"}
             </button>
             <button className="secondary" onClick={() => void saveAsExample()}>
               存为范例

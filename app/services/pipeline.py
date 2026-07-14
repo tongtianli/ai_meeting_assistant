@@ -67,7 +67,7 @@ async def run_resummarize(meeting_id: UUID) -> None:
             logger.error("resummarize: meeting %s not found", meeting_id)
             return
         try:
-            await _stage_summarize(session, meeting)
+            await _stage_summarize(session, meeting, origin="resummarize")
         except Exception as exc:
             logger.exception("resummarize failed for meeting %s", meeting_id)
             await session.rollback()
@@ -176,6 +176,8 @@ async def _stage_transcribe(
     await session.commit()
 
 
-async def _stage_summarize(session: AsyncSession, meeting: Meeting) -> None:
+async def _stage_summarize(
+    session: AsyncSession, meeting: Meeting, origin: str = "pipeline"
+) -> None:
     await _set_status(session, meeting, MeetingStatus.summarizing)
-    await summarize_meeting(session, meeting)
+    await summarize_meeting(session, meeting, origin=origin)

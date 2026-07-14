@@ -12,7 +12,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import PlainTextResponse, Response
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -149,15 +149,27 @@ async def resummarize_meeting(
     """重新生成纪要（追加新 Summary 版本，旧版本保留）。
 
     用途：结构化输出降级为纯文本后的重试，或调整范例库/术语表后重跑文风。
-    先置 summarizing 再入队，兼作并发锁：进行中的会议再点会得到 409。
+    done → summarizing 用条件更新原子迁移，兼作并发锁：并发请求只有
+    一个能完成迁移入队，其余得到 409（读-判-写会让两个请求都通过检查）。
     """
     meeting = await _get_meeting_or_404(db, meeting_id, user_id)
-    if meeting.status != MeetingStatus.done:
+    claimed = await db.scalar(
+        update(Meeting)
+        .where(
+            Meeting.id == meeting_id,
+            Meeting.user_id == user_id,
+            Meeting.status == MeetingStatus.done,
+        )
+        .values(status=MeetingStatus.summarizing)
+        .returning(Meeting.id)
+    )
+    if claimed is None:
+        await db.rollback()
+        await db.refresh(meeting)
         raise HTTPException(
             status_code=409,
             detail=f"meeting is {meeting.status.value}, only done meetings can be resummarized",
         )
-    meeting.status = MeetingStatus.summarizing
     await db.commit()
     await db.refresh(meeting)
     background_tasks.add_task(run_resummarize, meeting.id)

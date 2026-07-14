@@ -120,7 +120,9 @@ async def _generate_content(
         return {"text": resp.text}, f"{resp.provider}/{resp.model}", True
 
 
-async def summarize_meeting(session: AsyncSession, meeting: Meeting) -> Summary:
+async def summarize_meeting(
+    session: AsyncSession, meeting: Meeting, origin: str = "pipeline"
+) -> Summary:
     segments = list(
         await session.scalars(
             select(TranscriptSegment)
@@ -138,6 +140,9 @@ async def summarize_meeting(session: AsyncSession, meeting: Meeting) -> Summary:
         lines, [e.content for e in examples] or None
     )
     content["_meta"] = {
+        # 版本来源：pipeline（首次自动）| resummarize（用户重跑）| chat（对话修改，
+        # 见 summary_edit.py）——版本历史/审计按此区分各版本从何而来
+        "origin": origin,
         "model": model_id,
         "degraded": degraded,
         "meeting_time": meeting.created_at.isoformat(),

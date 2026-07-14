@@ -173,6 +173,54 @@ def test_speaker_boost_merges_and_dedupes(tmp_path, monkeypatch) -> None:
         assert body["citations"][0]["speaker_name"] == "张三"
 
 
+def test_speaker_boost_balanced_across_persons(tmp_path, monkeypatch) -> None:
+    """多人同问时每位说话人独立取 top-k，配额不被单人挤占。
+
+    绑定两位说话人后直接调 _retrieve：qa_speaker_top_k=2 时应各召回 2 条，
+    统一 limit 的实现可能 4 条全来自其中一位。
+    """
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "qa_speaker_top_k", 2)
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        mid = _done_meeting(client, headers)
+        for label, name in [("speaker_001", "张三"), ("speaker_002", "李四")]:
+            resp = client.post(
+                f"/api/meetings/{mid}/speaker-bindings",
+                json={"speaker_label": label, "name": name},
+                headers=headers,
+            )
+            assert resp.status_code < 300, resp.text
+        # 触发一次问答，让 segment embedding 懒加载就位
+        resp = client.post(
+            f"/api/meetings/{mid}/chat",
+            json={"question": "会议讨论了什么"},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+
+    async def _run():
+        from app.services.embeddings import get_embedder
+        from app.services.qa import _retrieve, match_speaker_person_ids
+        from app.services.speakers import active_speaker_names
+
+        question = "张三和李四分别说了什么"
+        async with SessionLocal() as session:
+            names = await active_speaker_names(session, uuid.UUID(mid))
+            pids = match_speaker_person_ids(names, question)
+            assert len(pids) == 2
+            qvec = (await get_embedder().embed([question]))[0]
+            return await _retrieve(
+                session, uuid.UUID(mid), qvec, k=0, person_ids=pids
+            )
+
+    rows = asyncio.run(_run())
+    by_label: dict[str, int] = {}
+    for seg in rows:
+        by_label[seg.speaker_label] = by_label.get(seg.speaker_label, 0) + 1
+    assert by_label == {"speaker_001": 2, "speaker_002": 2}
+
+
 def test_chat_history_ordered(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     with TestClient(app) as client:

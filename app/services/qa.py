@@ -112,6 +112,8 @@ async def _retrieve(
 
     说话人名字不在 embedding 里（只嵌纯文本），按人名提问需要结构化
     过滤补召回：person_id 在绑定时已物化到 segment，直接 WHERE 命中。
+    补召回按每位说话人各取 qa_speaker_top_k：多人同问（"张三和李四
+    分别说了什么"）时配额独立，避免 Top K 被单人挤占。
     """
     base = select(TranscriptSegment).where(
         TranscriptSegment.meeting_id == meeting_id,
@@ -119,14 +121,17 @@ async def _retrieve(
     )
     order = TranscriptSegment.embedding.cosine_distance(qvec)
     rows = list(await session.scalars(base.order_by(order).limit(k)))
-    if person_ids:
+    seen = {s.id for s in rows}
+    for pid in person_ids or []:
         boosted = await session.scalars(
-            base.where(TranscriptSegment.person_id.in_(person_ids))
+            base.where(TranscriptSegment.person_id == pid)
             .order_by(order)
             .limit(settings.qa_speaker_top_k)
         )
-        seen = {s.id for s in rows}
-        rows.extend(s for s in boosted if s.id not in seen)
+        for s in boosted:
+            if s.id not in seen:
+                seen.add(s.id)
+                rows.append(s)
     return rows
 
 
