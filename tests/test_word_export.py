@@ -104,7 +104,7 @@ def test_export_docx_degraded(tmp_path, monkeypatch) -> None:
             return LLMResponse(text=text, provider=self.name, model=self.model)
 
     monkeypatch.setattr(
-        summarize_mod, "build_router", lambda: LLMRouter([_Broken()])
+        summarize_mod, "build_router", lambda *a, **k: LLMRouter([_Broken()])
     )
     with TestClient(app) as client:
         headers = auth_headers(client)

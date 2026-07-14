@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Meeting, Summary, TranscriptSegment
 from app.schemas.summary import SummaryContent
-from app.services.llm import build_router
+from app.services.llm import LLMTaskType, build_router
 from app.services.llm.prompts import SYSTEM_SUMMARY_EDIT, summary_edit_prompt
 from app.services.summarize import next_summary_version, rebuild_action_items
 
@@ -45,7 +45,8 @@ async def edit_summary(
         # 降级纯文本纪要没有结构可改；引导先重跑摘要
         raise NoSummaryYet("当前纪要为降级纯文本，暂不支持聊天修改")
 
-    parsed, resp = await build_router().generate_json(
+    # 纪要编辑须保持未修改字段/文风/引用，属高价值结构化任务 → Air 优先
+    parsed, resp = await build_router(LLMTaskType.SUMMARY_EDIT).generate_json(
         SYSTEM_SUMMARY_EDIT,
         summary_edit_prompt(json.dumps(base, ensure_ascii=False), instruction),
         SummaryContent,

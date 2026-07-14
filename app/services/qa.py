@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.models import ChatMessage, Meeting, TranscriptSegment
 from app.schemas.chat import CitationOut, IntentOut, QaAnswer
 from app.services.embeddings import get_embedder
-from app.services.llm import LLMExhaustedError, build_router
+from app.services.llm import LLMExhaustedError, LLMTaskType, build_router
 from app.services.llm.prompts import SYSTEM_INTENT, SYSTEM_QA, intent_prompt, qa_prompt
 from app.services.speakers import active_speaker_names
 from app.services.summarize import _fmt_ts
@@ -37,7 +37,8 @@ class QaResult:
 async def classify_intent(message: str) -> str:
     """聊天意图路由（PRD §7.1）；分类失败一律回退 query（查询无副作用）。"""
     try:
-        parsed, _ = await build_router().generate_json(
+        # 短输入短输出的轻量任务：默认不消耗 Air 赠送额度
+        parsed, _ = await build_router(LLMTaskType.INTENT_CLASSIFY).generate_json(
             SYSTEM_INTENT, intent_prompt(message), IntentOut
         )
         return parsed.intent
@@ -235,7 +236,8 @@ async def _answer_question(
             for s in retrieved
         )
         try:
-            parsed, _ = await build_router().generate_json(
+            # QA 只输入检索后的少量片段，免费 Flash 优先；Air 仅作末位兜底
+            parsed, _ = await build_router(LLMTaskType.QA_ANSWER).generate_json(
                 SYSTEM_QA, qa_prompt(question, lines), QaAnswer
             )
             answer_text = parsed.answer.strip() or _NO_ANSWER
