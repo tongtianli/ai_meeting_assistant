@@ -12,7 +12,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import PlainTextResponse, Response
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -28,7 +28,7 @@ from app.schemas.meeting import (
     SpeakerRenameIn,
     TranscriptOut,
 )
-from app.services.pipeline import run_pipeline
+from app.services.pipeline import run_pipeline, run_resummarize
 from app.services.speakers import (
     UnknownSpeakerLabel,
     active_speaker_names,
@@ -136,6 +136,43 @@ async def retry_meeting(
             detail=f"meeting is {meeting.status.value}, only failed meetings can be retried",
         )
     background_tasks.add_task(run_pipeline, meeting.id)
+    return meeting
+
+
+@router.post("/{meeting_id}/resummarize", response_model=MeetingOut)
+async def resummarize_meeting(
+    meeting_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(require_user),
+) -> Meeting:
+    """重新生成纪要（追加新 Summary 版本，旧版本保留）。
+
+    用途：结构化输出降级为纯文本后的重试，或调整范例库/术语表后重跑文风。
+    done → summarizing 用条件更新原子迁移，兼作并发锁：并发请求只有
+    一个能完成迁移入队，其余得到 409（读-判-写会让两个请求都通过检查）。
+    """
+    meeting = await _get_meeting_or_404(db, meeting_id, user_id)
+    claimed = await db.scalar(
+        update(Meeting)
+        .where(
+            Meeting.id == meeting_id,
+            Meeting.user_id == user_id,
+            Meeting.status == MeetingStatus.done,
+        )
+        .values(status=MeetingStatus.summarizing)
+        .returning(Meeting.id)
+    )
+    if claimed is None:
+        await db.rollback()
+        await db.refresh(meeting)
+        raise HTTPException(
+            status_code=409,
+            detail=f"meeting is {meeting.status.value}, only done meetings can be resummarized",
+        )
+    await db.commit()
+    await db.refresh(meeting)
+    background_tasks.add_task(run_resummarize, meeting.id)
     return meeting
 
 

@@ -95,6 +95,132 @@ def test_ask_returns_answer_with_resolved_citation(tmp_path, monkeypatch) -> Non
         asyncio.run(_check_persisted())
 
 
+def test_match_speaker_person_ids() -> None:
+    from app.services.qa import match_speaker_person_ids
+
+    pid1, pid2 = uuid.uuid4(), uuid.uuid4()
+    names = {
+        "speaker_001": (pid1, "张三"),
+        "speaker_002": (pid2, "李"),  # 单字名不参与匹配
+        "speaker_003": (pid1, "张三"),  # 同人绑多个 label → 去重
+    }
+    assert match_speaker_person_ids(names, "张三说了什么") == [pid1]
+    assert match_speaker_person_ids(names, "李说了什么") == []
+    assert match_speaker_person_ids(names, "今天讨论了哪些议题") == []
+    assert match_speaker_person_ids({}, "张三说了什么") == []
+
+
+def test_speaker_name_boosts_recall(tmp_path, monkeypatch) -> None:
+    """问题命中绑定真名时，该说话人的片段并入候选集（混合检索）。
+
+    mock 词袋向量对中文整句几乎无重叠，向量排序不可控——把 qa_top_k
+    压成 0 关掉向量召回，候选集是否非空完全由名字命中决定，测试确定。
+    """
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "qa_top_k", 0)
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        mid = _done_meeting(client, headers)
+
+        # 未绑定真名：名字无从命中，向量召回又为 0 → 未找到
+        resp = client.post(
+            f"/api/meetings/{mid}/chat",
+            json={"question": "张三说了什么"},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["citations"] == []
+
+        resp = client.post(
+            f"/api/meetings/{mid}/speaker-bindings",
+            json={"speaker_label": "speaker_001", "name": "张三"},
+            headers=headers,
+        )
+        assert resp.status_code < 300, resp.text
+
+        # 绑定后重问：候选集为张三的片段（seq 0/2/4/6），mock 引用最小 seq
+        resp = client.post(
+            f"/api/meetings/{mid}/chat",
+            json={"question": "张三说了什么"},
+            headers=headers,
+        )
+        body = resp.json()
+        assert body["citations"], body
+        assert body["citations"][0]["seq"] == 0
+        assert body["citations"][0]["speaker_name"] == "张三"
+
+
+def test_speaker_boost_merges_and_dedupes(tmp_path, monkeypatch) -> None:
+    """默认 top_k 下向量召回与说话人补召回合并去重，引用仍落在真实 segment。"""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        mid = _done_meeting(client, headers)
+        client.post(
+            f"/api/meetings/{mid}/speaker-bindings",
+            json={"speaker_label": "speaker_001", "name": "张三"},
+            headers=headers,
+        )
+        resp = client.post(
+            f"/api/meetings/{mid}/chat",
+            json={"question": "张三说了什么"},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        # 补召回保证张三的 seq=0 一定在候选集里 → mock 的 min-seq 引用恒为 0
+        assert body["citations"][0]["seq"] == 0
+        assert body["citations"][0]["speaker_name"] == "张三"
+
+
+def test_speaker_boost_balanced_across_persons(tmp_path, monkeypatch) -> None:
+    """多人同问时每位说话人独立取 top-k，配额不被单人挤占。
+
+    绑定两位说话人后直接调 _retrieve：qa_speaker_top_k=2 时应各召回 2 条，
+    统一 limit 的实现可能 4 条全来自其中一位。
+    """
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "qa_speaker_top_k", 2)
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        mid = _done_meeting(client, headers)
+        for label, name in [("speaker_001", "张三"), ("speaker_002", "李四")]:
+            resp = client.post(
+                f"/api/meetings/{mid}/speaker-bindings",
+                json={"speaker_label": label, "name": name},
+                headers=headers,
+            )
+            assert resp.status_code < 300, resp.text
+        # 触发一次问答，让 segment embedding 懒加载就位
+        resp = client.post(
+            f"/api/meetings/{mid}/chat",
+            json={"question": "会议讨论了什么"},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+
+    async def _run():
+        from app.services.embeddings import get_embedder
+        from app.services.qa import _retrieve, match_speaker_person_ids
+        from app.services.speakers import active_speaker_names
+
+        question = "张三和李四分别说了什么"
+        async with SessionLocal() as session:
+            names = await active_speaker_names(session, uuid.UUID(mid))
+            pids = match_speaker_person_ids(names, question)
+            assert len(pids) == 2
+            qvec = (await get_embedder().embed([question]))[0]
+            return await _retrieve(
+                session, uuid.UUID(mid), qvec, k=0, person_ids=pids
+            )
+
+    rows = asyncio.run(_run())
+    by_label: dict[str, int] = {}
+    for seg in rows:
+        by_label[seg.speaker_label] = by_label.get(seg.speaker_label, 0) + 1
+    assert by_label == {"speaker_001": 2, "speaker_002": 2}
+
+
 def test_chat_history_ordered(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     with TestClient(app) as client:

@@ -10,6 +10,7 @@ import {
   getSummary,
   getTranscript,
   renameSpeaker,
+  resummarizeMeeting,
   retryMeeting,
 } from "../api/meetings";
 import type { Meeting, Segment, Summary } from "../api/types";
@@ -28,6 +29,7 @@ export default function MeetingDetailPage() {
   const [tab, setTab] = useState<"summary" | "transcript" | "qa">("summary");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [resummarizing, setResummarizing] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [audioSrc, setAudioSrc] = useState("");
@@ -80,6 +82,20 @@ export default function MeetingDetailPage() {
       setNotice(`已存为范例「${ex.title}」，之后生成纪要将模仿其文风（范例库可润色）`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "存为范例失败");
+    }
+  }
+
+  async function handleResummarize() {
+    setError("");
+    setNotice("");
+    setResummarizing(true); // 请求期间禁用按钮：服务端有原子锁，前端少发重复请求
+    try {
+      await resummarizeMeeting(id);
+      await refresh(); // 状态已置 summarizing，轮询接管直至新版纪要就绪
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重新生成纪要失败");
+    } finally {
+      setResummarizing(false);
     }
   }
 
@@ -145,6 +161,13 @@ export default function MeetingDetailPage() {
         </div>
       )}
 
+      {/* done + error_message 仅出现在重新生成纪要失败后（旧版纪要仍在展示） */}
+      {meeting.status === "done" && meeting.error_message && (
+        <div className="error">
+          重新生成纪要失败：{meeting.error_message}（以下仍为原版本）
+        </div>
+      )}
+
       {processing && (
         <div className="card muted">处理中，页面会自动刷新进度…</div>
       )}
@@ -182,6 +205,13 @@ export default function MeetingDetailPage() {
               AI 问答
             </button>
             <span style={{ flex: 1 }} />
+            <button
+              className="secondary"
+              disabled={resummarizing}
+              onClick={() => void handleResummarize()}
+            >
+              {resummarizing ? "正在重新生成…" : "重新生成纪要"}
+            </button>
             <button className="secondary" onClick={() => void saveAsExample()}>
               存为范例
             </button>
@@ -211,9 +241,13 @@ export default function MeetingDetailPage() {
               onRename={handleRename}
             />
           )}
-          {tab === "qa" && (
-            <QaPanel meetingId={id} onSeek={seek} onSummaryUpdated={refresh} />
-          )}
+          {/* 常驻挂载：卸载会丢进行中的提问状态（「思考中」气泡与回调） */}
+          <QaPanel
+            meetingId={id}
+            onSeek={seek}
+            onSummaryUpdated={refresh}
+            visible={tab === "qa"}
+          />
         </>
       )}
     </div>

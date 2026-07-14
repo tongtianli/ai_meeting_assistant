@@ -55,6 +55,29 @@ async def run_pipeline(meeting_id: UUID) -> None:
         await session.commit()
 
 
+async def run_resummarize(meeting_id: UUID) -> None:
+    """仅重跑摘要阶段（已完成会议重新生成纪要，追加新 Summary 版本）。
+
+    失败语义与 run_pipeline 不同：会议已有可用转录与旧版纪要，失败时
+    回到 done 而非 failed，避免旧纪要在界面上消失；错误存 error_message。
+    """
+    async with SessionLocal() as session:
+        meeting = await session.get(Meeting, meeting_id)
+        if meeting is None:
+            logger.error("resummarize: meeting %s not found", meeting_id)
+            return
+        try:
+            await _stage_summarize(session, meeting, origin="resummarize")
+        except Exception as exc:
+            logger.exception("resummarize failed for meeting %s", meeting_id)
+            await session.rollback()
+            meeting.error_message = f"{type(exc).__name__}: {exc}"[:2000]
+        else:
+            meeting.error_message = None
+        meeting.status = MeetingStatus.done
+        await session.commit()
+
+
 async def _set_status(
     session: AsyncSession, meeting: Meeting, status: MeetingStatus
 ) -> None:
@@ -153,6 +176,8 @@ async def _stage_transcribe(
     await session.commit()
 
 
-async def _stage_summarize(session: AsyncSession, meeting: Meeting) -> None:
+async def _stage_summarize(
+    session: AsyncSession, meeting: Meeting, origin: str = "pipeline"
+) -> None:
     await _set_status(session, meeting, MeetingStatus.summarizing)
-    await summarize_meeting(session, meeting)
+    await summarize_meeting(session, meeting, origin=origin)
