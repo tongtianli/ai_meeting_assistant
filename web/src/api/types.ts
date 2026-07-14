@@ -79,6 +79,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   citations: Citation[];
+  summary_version?: number | null; // 本轮改纪要产出的新版本（仅提问响应携带）
   created_at: string;
 }
 

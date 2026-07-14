@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -9,6 +10,12 @@ class QaAnswer(BaseModel):
 
     answer: str
     cited_segment_seqs: list[int] = []
+
+
+class IntentOut(BaseModel):
+    """聊天意图路由（PRD §7.1）：查询 or 修改纪要。"""
+
+    intent: Literal["query", "edit"]
 
 
 class AskIn(BaseModel):
@@ -31,4 +38,6 @@ class ChatMessageOut(BaseModel):
     role: str  # user | assistant
     content: str
     citations: list[CitationOut] = []
+    # 本轮改纪要产出的新版本号；仅 POST 响应携带（历史消息文本中已含版本号）
+    summary_version: int | None = None
     created_at: datetime

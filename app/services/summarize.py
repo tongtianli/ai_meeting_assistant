@@ -146,42 +146,62 @@ async def summarize_meeting(session: AsyncSession, meeting: Meeting) -> Summary:
         "style_examples": [{"id": str(e.id), "title": e.title} for e in examples],
     }
 
-    next_version = (
-        await session.scalar(
-            select(func.coalesce(func.max(Summary.version), 0)).where(
-                Summary.meeting_id == meeting.id
-            )
-        )
-    ) + 1
     summary = Summary(
-        meeting_id=meeting.id, version=next_version, content_json=content
+        meeting_id=meeting.id,
+        version=await next_summary_version(session, meeting.id),
+        content_json=content,
     )
     session.add(summary)
 
-    # ActionItem 幂等重建；溯源：seq → 真实 segment（id / person_id）
-    await session.execute(
-        delete(ActionItem).where(ActionItem.meeting_id == meeting.id)
-    )
     if not degraded:
         seg_by_seq = {s.seq: s for s in segments}
-        for todo in SummaryContent.model_validate(
+        todos = SummaryContent.model_validate(
             {k: v for k, v in content.items() if k != "_meta"}
-        ).todos:
-            source = (
-                seg_by_seq.get(todo.source_segment_seq)
-                if todo.source_segment_seq is not None
-                else None
-            )
-            session.add(
-                ActionItem(
-                    meeting_id=meeting.id,
-                    task=todo.task,
-                    owner_person_id=source.person_id if source else None,
-                    owner_text=todo.owner,
-                    deadline=todo.deadline,
-                    source_segment_id=source.id if source else None,
-                )
-            )
+        ).todos
+        await rebuild_action_items(session, meeting.id, todos, seg_by_seq)
+    else:
+        await session.execute(
+            delete(ActionItem).where(ActionItem.meeting_id == meeting.id)
+        )
     await session.commit()
     await session.refresh(summary)
     return summary
+
+
+async def next_summary_version(session: AsyncSession, meeting_id) -> int:
+    """版本递增（Summary 版本化，PRD Feature 6）；摘要与聊天改纪要共用。"""
+    current = await session.scalar(
+        select(func.coalesce(func.max(Summary.version), 0)).where(
+            Summary.meeting_id == meeting_id
+        )
+    )
+    return current + 1
+
+
+async def rebuild_action_items(
+    session: AsyncSession, meeting_id, todos, seg_by_seq: dict
+) -> None:
+    """ActionItem 幂等重建；溯源：seq → 真实 segment（id / person_id）。
+
+    Word 导出的 TODO 表读 ActionItem 表而非 content_json——任何产生新
+    Summary 版本的路径（摘要 / 聊天改纪要）都必须同步调用本函数。
+    """
+    await session.execute(
+        delete(ActionItem).where(ActionItem.meeting_id == meeting_id)
+    )
+    for todo in todos:
+        source = (
+            seg_by_seq.get(todo.source_segment_seq)
+            if todo.source_segment_seq is not None
+            else None
+        )
+        session.add(
+            ActionItem(
+                meeting_id=meeting_id,
+                task=todo.task,
+                owner_person_id=source.person_id if source else None,
+                owner_text=todo.owner,
+                deadline=todo.deadline,
+                source_segment_id=source.id if source else None,
+            )
+        )

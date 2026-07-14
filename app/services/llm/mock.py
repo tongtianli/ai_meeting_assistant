@@ -50,7 +50,14 @@ class MockLLMProvider(LLMProvider):
         json_mode: bool = True,
         temperature: float = 0.2,
     ) -> LLMResponse:
-        if "会议问答助手" in system:  # QA 分支（SYSTEM_QA 稳定标记）
+        if "意图分类器" in system:  # 意图路由分支（SYSTEM_INTENT 稳定标记）
+            is_edit = any(k in user for k in ("改", "删", "换", "合并", "加上"))
+            text = json.dumps({"intent": "edit" if is_edit else "query"})
+        elif "纪要编辑器" in system:  # 改纪要分支（SYSTEM_SUMMARY_EDIT 稳定标记）
+            edited = dict(_SUMMARY_JSON)
+            edited["decisions"] = ["【已修改】下周完成上传接口开发并同步验收标准"]
+            text = json.dumps(edited, ensure_ascii=False)
+        elif "会议问答助手" in system:  # QA 分支（SYSTEM_QA 稳定标记）
             # 引用检索到片段中 seq 最小的一条，保证落在真实 segment 上
             seqs = [int(m) for m in re.findall(r"\[(\d+)\]", user)]
             cited = [min(seqs)] if seqs else []
