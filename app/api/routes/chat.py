@@ -9,6 +9,7 @@ from app.core.security import require_user
 from app.db.session import get_db
 from app.models import ChatMessage, Meeting, MeetingStatus, TranscriptSegment
 from app.schemas.chat import AskIn, ChatMessageOut
+from app.services.llm.usage import usage_context
 from app.services.qa import handle_chat, resolve_citations
 
 router = APIRouter(prefix="/meetings/{meeting_id}/chat", tags=["chat"])
@@ -74,7 +75,9 @@ async def ask(
     )
     if not has_segments:
         raise HTTPException(status_code=409, detail="meeting has no transcript")
-    result = await handle_chat(db, meeting, body.question.strip())
+    # 聊天链路的 LLM/embedding 用量审计归属本会议（Tech Design M4 §11）
+    with usage_context(meeting_id=meeting.id, user_id=user_id):
+        result = await handle_chat(db, meeting, body.question.strip())
     out = await _to_out(db, meeting_id, result.assistant)
     out.summary_version = result.summary_version  # 前端据此刷新纪要 tab
     return out

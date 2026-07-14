@@ -12,6 +12,7 @@ from app.api.routes.chat import router as chat_router
 from app.api.routes.examples import router as examples_router
 from app.api.routes.glossary import router as glossary_router
 from app.api.routes.health import router as health_router
+from app.api.routes.llm_usage import router as llm_usage_router
 from app.api.routes.meetings import router as meetings_router
 from app.api.routes.persons import router as persons_router
 from app.db.session import SessionLocal
@@ -61,6 +62,7 @@ app.include_router(examples_router, prefix="/api")
 app.include_router(glossary_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(audio_router, prefix="/api")
+app.include_router(llm_usage_router, prefix="/api")
 
 # 生产部署：构建产物存在时由 FastAPI 同源托管（无 CORS 问题）；
 # 开发时用 vite dev server（/api 代理到本服务）

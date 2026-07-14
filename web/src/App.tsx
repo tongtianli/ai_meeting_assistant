@@ -3,6 +3,7 @@ import { getToken } from "./api/client";
 import ExamplesPage from "./pages/ExamplesPage";
 import GlossaryPage from "./pages/GlossaryPage";
 import HomePage from "./pages/HomePage";
+import LlmUsagePage from "./pages/LlmUsagePage";
 import LoginPage from "./pages/LoginPage";
 import MeetingDetailPage from "./pages/MeetingDetailPage";
 import PersonsPage from "./pages/PersonsPage";
@@ -53,6 +54,14 @@ export default function App() {
           element={
             <RequireAuth>
               <GlossaryPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/llm-usage"
+          element={
+            <RequireAuth>
+              <LlmUsagePage />
             </RequireAuth>
           }
         />
