@@ -13,9 +13,16 @@ interface Props {
   meetingId: string;
   onSeek: (seconds: number) => void;
   onSummaryUpdated?: () => void;
+  /** false 时仅 CSS 隐藏不卸载：切 tab 保住进行中的提问状态与「思考中」气泡 */
+  visible?: boolean;
 }
 
-export default function QaPanel({ meetingId, onSeek, onSummaryUpdated }: Props) {
+export default function QaPanel({
+  meetingId,
+  onSeek,
+  onSummaryUpdated,
+  visible = true,
+}: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -35,8 +42,9 @@ export default function QaPanel({ meetingId, onSeek, onSummaryUpdated }: Props) 
   }, [refresh]);
 
   useEffect(() => {
+    if (!visible) return; // display:none 时滚动无效，等切回时再滚到底部
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, busy]);
+  }, [messages, busy, visible]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -67,7 +75,7 @@ export default function QaPanel({ meetingId, onSeek, onSummaryUpdated }: Props) 
   }
 
   return (
-    <div className="card">
+    <div className="card" style={{ display: visible ? undefined : "none" }}>
       <div className="muted" style={{ marginBottom: 12 }}>
         基于本次会议转录内容问答，回答附带原文引用（点击时间戳跳转播放）；
         也可以用自然语言修改纪要（如「把决策第二条改成…」），将生成新版本。

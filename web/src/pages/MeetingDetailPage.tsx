@@ -10,6 +10,7 @@ import {
   getSummary,
   getTranscript,
   renameSpeaker,
+  resummarizeMeeting,
   retryMeeting,
 } from "../api/meetings";
 import type { Meeting, Segment, Summary } from "../api/types";
@@ -83,6 +84,17 @@ export default function MeetingDetailPage() {
     }
   }
 
+  async function handleResummarize() {
+    setError("");
+    setNotice("");
+    try {
+      await resummarizeMeeting(id);
+      await refresh(); // 状态已置 summarizing，轮询接管直至新版纪要就绪
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重新生成纪要失败");
+    }
+  }
+
   async function handleRename(label: string, currentName: string) {
     const name = window.prompt(`将 ${label} 重命名为：`, currentName)?.trim();
     if (!name) return;
@@ -145,6 +157,13 @@ export default function MeetingDetailPage() {
         </div>
       )}
 
+      {/* done + error_message 仅出现在重新生成纪要失败后（旧版纪要仍在展示） */}
+      {meeting.status === "done" && meeting.error_message && (
+        <div className="error">
+          重新生成纪要失败：{meeting.error_message}（以下仍为原版本）
+        </div>
+      )}
+
       {processing && (
         <div className="card muted">处理中，页面会自动刷新进度…</div>
       )}
@@ -182,6 +201,12 @@ export default function MeetingDetailPage() {
               AI 问答
             </button>
             <span style={{ flex: 1 }} />
+            <button
+              className="secondary"
+              onClick={() => void handleResummarize()}
+            >
+              重新生成纪要
+            </button>
             <button className="secondary" onClick={() => void saveAsExample()}>
               存为范例
             </button>
@@ -211,9 +236,13 @@ export default function MeetingDetailPage() {
               onRename={handleRename}
             />
           )}
-          {tab === "qa" && (
-            <QaPanel meetingId={id} onSeek={seek} onSummaryUpdated={refresh} />
-          )}
+          {/* 常驻挂载：卸载会丢进行中的提问状态（「思考中」气泡与回调） */}
+          <QaPanel
+            meetingId={id}
+            onSeek={seek}
+            onSummaryUpdated={refresh}
+            visible={tab === "qa"}
+          />
         </>
       )}
     </div>
