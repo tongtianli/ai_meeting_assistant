@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -69,8 +70,9 @@ class Settings(BaseSettings):
 
     # LLM Router（PRD §4：统一 service 抽象；按序尝试，失败降级到下一个）
     # legacy：所有任务共用 LLM_PROVIDERS；task_based：按任务类型独立路由
-    # （Tech Design M4：出问题时回滚 LLM_ROUTING_MODE=legacy 即可）
-    llm_routing_mode: str = "task_based"
+    # （Tech Design M4：出问题时回滚 LLM_ROUTING_MODE=legacy 即可）。
+    # Literal 严格校验：拼写错误在启动阶段直接失败，不静默落入 legacy
+    llm_routing_mode: Literal["task_based", "legacy"] = "task_based"
     llm_providers: str = "gemini,glm"  # legacy 模式顺序；测试/无 key 联调可用 "mock"
     # 任务级路由（task_based 模式，Tech Design M4 §6/§19）：
     # 高价值任务（最终纪要/纪要编辑）优先消耗 GLM-4.5-Air 赠送额度，
@@ -95,10 +97,11 @@ class Settings(BaseSettings):
     glm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     glm_model: str = "glm-4-flash"  # legacy 模式的单一 glm 节点模型
     # task_based 模式下同一 GLM key 的两个独立路由节点（额度/统计可区分）。
-    # 模型 ID 上线前须经控制台+真实调用确认；账号不支持时改为控制台列出的
-    # 免费 Flash 稳定型号，不在代码中静默替换
+    # 模型 ID 上线前须经控制台+真实调用确认，不在代码中静默替换：
+    # flash 默认沿用已在生产验证的 glm-4-flash，确认账号支持新版免费
+    # Flash（如 glm-4.7-flash）后再通过环境变量切换
     glm_air_model: str = "glm-4.5-air"
-    glm_flash_model: str = "glm-4.7-flash"
+    glm_flash_model: str = "glm-4-flash"
 
     # AI 问答 RAG（PRD Feature 5）。embedding 不能像 LLM 那样降级混用
     # （不同模型向量空间不通），故单一 provider、无 fallback。

@@ -127,6 +127,16 @@ def test_unknown_provider_name_raises(monkeypatch) -> None:
         build_router(LLMTaskType.SUMMARY_FINAL)
 
 
+def test_invalid_routing_mode_fails_at_startup() -> None:
+    """LLM_ROUTING_MODE 拼写错误应在配置加载时报错，而非静默落入 legacy。"""
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(llm_routing_mode="task-base")
+
+
 # ---------- fallback 链语义（Air → Flash → Gemini） ----------
 
 def test_air_success_does_not_touch_flash_or_gemini() -> None:
