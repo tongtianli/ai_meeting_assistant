@@ -28,7 +28,7 @@ from app.schemas.meeting import (
     SpeakerRenameIn,
     TranscriptOut,
 )
-from app.services.pipeline import run_pipeline
+from app.services.pipeline import run_pipeline, run_resummarize
 from app.services.speakers import (
     UnknownSpeakerLabel,
     active_speaker_names,
@@ -136,6 +136,31 @@ async def retry_meeting(
             detail=f"meeting is {meeting.status.value}, only failed meetings can be retried",
         )
     background_tasks.add_task(run_pipeline, meeting.id)
+    return meeting
+
+
+@router.post("/{meeting_id}/resummarize", response_model=MeetingOut)
+async def resummarize_meeting(
+    meeting_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(require_user),
+) -> Meeting:
+    """重新生成纪要（追加新 Summary 版本，旧版本保留）。
+
+    用途：结构化输出降级为纯文本后的重试，或调整范例库/术语表后重跑文风。
+    先置 summarizing 再入队，兼作并发锁：进行中的会议再点会得到 409。
+    """
+    meeting = await _get_meeting_or_404(db, meeting_id, user_id)
+    if meeting.status != MeetingStatus.done:
+        raise HTTPException(
+            status_code=409,
+            detail=f"meeting is {meeting.status.value}, only done meetings can be resummarized",
+        )
+    meeting.status = MeetingStatus.summarizing
+    await db.commit()
+    await db.refresh(meeting)
+    background_tasks.add_task(run_resummarize, meeting.id)
     return meeting
 
 

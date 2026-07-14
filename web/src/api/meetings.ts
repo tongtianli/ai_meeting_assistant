@@ -55,6 +55,12 @@ export function retryMeeting(id: string): Promise<Meeting> {
   return request<Meeting>(`/api/meetings/${id}/retry`, { method: "POST" });
 }
 
+export function resummarizeMeeting(id: string): Promise<Meeting> {
+  return request<Meeting>(`/api/meetings/${id}/resummarize`, {
+    method: "POST",
+  });
+}
+
 export function deleteMeeting(id: string): Promise<void> {
   return request<void>(`/api/meetings/${id}`, { method: "DELETE" });
 }

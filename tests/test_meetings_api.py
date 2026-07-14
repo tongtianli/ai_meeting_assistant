@@ -90,3 +90,65 @@ def test_retry_only_allowed_when_failed(tmp_path, monkeypatch) -> None:
         # 管道已成功（done），此时重试应被拒绝
         resp = client.post(f"/api/meetings/{meeting_id}/retry", headers=headers)
         assert resp.status_code == 409
+
+
+def test_resummarize_appends_new_version(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        meeting_id = _upload(client, headers, title="重跑纪要", filename="rs.wav").json()["id"]
+
+        resp = client.post(f"/api/meetings/{meeting_id}/resummarize", headers=headers)
+        assert resp.status_code == 200, resp.text
+
+        # TestClient 同步执行 BackgroundTasks，此时重跑已完成
+        body = client.get(f"/api/meetings/{meeting_id}", headers=headers).json()
+        assert body["status"] == "done"
+        assert body["error_message"] is None
+        summary = client.get(
+            f"/api/meetings/{meeting_id}/summary", headers=headers
+        ).json()
+        assert summary["version"] == 2  # 追加新版本而非覆盖
+
+
+def test_resummarize_only_allowed_when_done(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    import app.services.pipeline as pipeline_mod
+
+    async def boom(session, meeting):
+        raise RuntimeError("summarize down")
+
+    monkeypatch.setattr(pipeline_mod, "summarize_meeting", boom)
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        meeting_id = _upload(client, headers, title="失败会", filename="f.wav").json()["id"]
+        body = client.get(f"/api/meetings/{meeting_id}", headers=headers).json()
+        assert body["status"] == "failed"
+
+        resp = client.post(f"/api/meetings/{meeting_id}/resummarize", headers=headers)
+        assert resp.status_code == 409
+
+
+def test_resummarize_failure_keeps_done_and_old_summary(tmp_path, monkeypatch) -> None:
+    """重跑失败不能吞掉旧纪要：状态回 done，错误存 error_message。"""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    import app.services.pipeline as pipeline_mod
+
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        meeting_id = _upload(client, headers, title="重跑失败", filename="rf.wav").json()["id"]
+
+        async def boom(session, meeting):
+            raise RuntimeError("llm outage")
+
+        monkeypatch.setattr(pipeline_mod, "summarize_meeting", boom)
+        resp = client.post(f"/api/meetings/{meeting_id}/resummarize", headers=headers)
+        assert resp.status_code == 200, resp.text
+
+        body = client.get(f"/api/meetings/{meeting_id}", headers=headers).json()
+        assert body["status"] == "done"
+        assert "llm outage" in body["error_message"]
+        summary = client.get(
+            f"/api/meetings/{meeting_id}/summary", headers=headers
+        ).json()
+        assert summary["version"] == 1  # 旧版纪要原样保留
