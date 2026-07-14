@@ -125,5 +125,9 @@ def _mock_providers(monkeypatch):
     """测试环境统一走 mock provider，不受本机 .env 配置影响，
     避免真实 ASR 推理与 LLM 网络调用。"""
     monkeypatch.setattr(settings, "llm_providers", "mock")
+    # 清空云端 key：task_based 任务路由（glm_air 等）全部不可用，
+    # build_router 回退 LLM_PROVIDERS=mock——不受本机 .env 影响
+    monkeypatch.setattr(settings, "glm_api_key", "")
+    monkeypatch.setattr(settings, "gemini_api_key", "")
     monkeypatch.setattr(settings, "asr_provider", "mock")
     monkeypatch.setattr(settings, "embedding_provider", "mock")

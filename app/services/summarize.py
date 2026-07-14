@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models import ActionItem, Meeting, Summary, SummaryExample, TranscriptSegment
 from app.schemas.summary import SummaryContent
-from app.services.llm import LLMExhaustedError, build_router
+from app.services.llm import LLMExhaustedError, LLMTaskType, build_router
 from app.services.llm.prompts import (
     SYSTEM_PLAIN,
     SYSTEM_SUMMARIZER,
@@ -90,31 +90,34 @@ async def _generate_content(
     transcript_lines: list[str], examples: list[str] | None = None
 ) -> tuple[dict, str, bool]:
     """返回 (content_json, 模型标识, degraded)。"""
-    router = build_router()
+    # 任务级路由：map 偏事实抽取走免费 Flash 优先；最终纪要（single-pass /
+    # reduce / 降级纯文本）是高价值任务，优先消耗 GLM-4.5-Air 赠送额度
+    final_router = build_router(LLMTaskType.SUMMARY_FINAL)
     chunks = chunk_lines(transcript_lines)
     try:
         if len(chunks) == 1:
-            content, resp = await router.generate_json(
+            content, resp = await final_router.generate_json(
                 SYSTEM_SUMMARIZER,
                 single_pass_prompt(chunks[0], examples),
                 SummaryContent,
             )
         else:
             logger.info("long meeting: map-reduce over %d chunks", len(chunks))
+            map_router = build_router(LLMTaskType.SUMMARY_MAP)
             partials: list[str] = []
             for i, chunk in enumerate(chunks):
-                partial, _ = await router.generate_json(
+                partial, _ = await map_router.generate_json(
                     SYSTEM_SUMMARIZER, map_prompt(chunk, i + 1, len(chunks)), SummaryContent
                 )
                 partials.append(partial.model_dump_json())
-            content, resp = await router.generate_json(
+            content, resp = await final_router.generate_json(
                 SYSTEM_SUMMARIZER, reduce_prompt(partials, examples), SummaryContent
             )
         return content.model_dump(), f"{resp.provider}/{resp.model}", False
     except LLMExhaustedError as exc:
         # 降级：至少产出纯文本纪要（PRD §9.1）
         logger.warning("structured summary failed, degrading to plain text: %s", exc)
-        resp = await router.generate_text(
+        resp = await final_router.generate_text(
             SYSTEM_PLAIN, plain_text_prompt("\n".join(transcript_lines))
         )
         return {"text": resp.text}, f"{resp.provider}/{resp.model}", True

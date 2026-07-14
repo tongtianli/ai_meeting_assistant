@@ -121,7 +121,7 @@ def test_summarize_degrades_to_plain_text(tmp_path, monkeypatch) -> None:
     from app.services.llm.router import LLMRouter
 
     monkeypatch.setattr(
-        summarize_mod, "build_router", lambda: LLMRouter([_BrokenJSONProvider()])
+        summarize_mod, "build_router", lambda *a, **k: LLMRouter([_BrokenJSONProvider()])
     )
 
     async def scenario() -> None:

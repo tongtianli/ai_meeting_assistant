@@ -168,7 +168,7 @@ def test_edit_llm_failure_no_new_version(tmp_path, monkeypatch) -> None:
         async def complete(self, system, user, json_mode=True, temperature=0.2):
             raise LLMError("outage")
 
-    monkeypatch.setattr(edit_mod, "build_router", lambda: LLMRouter([_Down()]))
+    monkeypatch.setattr(edit_mod, "build_router", lambda *a, **k: LLMRouter([_Down()]))
 
     with TestClient(app) as client:
         headers = auth_headers(client)

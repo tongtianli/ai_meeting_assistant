@@ -168,7 +168,7 @@ def test_retry_after_summarize_failure_reuses_transcript(
 
     monkeypatch.setattr(pipeline_mod, "get_asr_provider", lambda: CountingASR())
     monkeypatch.setattr(
-        summarize_mod, "build_router", lambda: LLMRouter([DownLLM()])
+        summarize_mod, "build_router", lambda *a, **k: LLMRouter([DownLLM()])
     )
 
     async def scenario() -> None:
@@ -208,7 +208,7 @@ def test_retry_after_summarize_failure_reuses_transcript(
             monkeypatch.setattr(
                 summarize_mod,
                 "build_router",
-                lambda: LLMRouter([MockLLMProvider()]),
+                lambda *a, **k: LLMRouter([MockLLMProvider()]),
             )
             await run_pipeline(mid)
             async with SessionLocal() as session:
