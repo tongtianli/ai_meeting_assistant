@@ -15,6 +15,8 @@ from app.core.config import settings
 from app.core.security import require_user
 from app.db.session import get_db
 from app.models import LlmUsageRecord
+from app.services.llm import quota
+from app.services.llm.base import LLMTaskType
 from app.schemas.llm_usage import (
     FailureOut,
     GrantStatus,
@@ -55,7 +57,12 @@ def _expiry_warning(expires_at: datetime, days: int) -> str | None:
 
 
 async def _grant_status(
-    db: AsyncSession, user_id: UUID, name: str, providers: list[str], grant_total: int
+    db: AsyncSession,
+    user_id: UUID,
+    name: str,
+    providers: list[str],
+    grant_total: int,
+    soft_limit: int | None = None,
 ) -> GrantStatus:
     now = datetime.now(timezone.utc)
     token_sum = func.coalesce(func.sum(LlmUsageRecord.total_tokens), 0)
@@ -114,6 +121,22 @@ async def _grant_status(
     days_until = (expires_at.date() - now.astimezone(expires_at.tzinfo).date()).days
     ratio = tracked / grant_total if grant_total > 0 else 0.0
 
+    # 熔断状态（§12.3）：与 Router 的判定共用 quota.air_gate，保证口径一致。
+    # 仅 Air 有路由级熔断；通用包（embedding 不可降级混用）只做软上限预警
+    expired = quota.grant_expired(now)
+    hard_reached = tracked >= grant_total
+    enforcement, enforcement_reason = "none", None
+    if soft_limit is not None and name == "glm_air":
+        snapshot = quota.QuotaSnapshot(air_tracked=tracked)
+        high_ok, high_reason = quota.air_gate(
+            snapshot, LLMTaskType.SUMMARY_FINAL.value
+        )
+        low_ok, _ = quota.air_gate(snapshot, LLMTaskType.QA_ANSWER.value)
+        if not high_ok:
+            enforcement, enforcement_reason = "blocked", high_reason
+        elif not low_ok:
+            enforcement = "high_value_only"
+
     return GrantStatus(
         name=name,
         providers=providers,
@@ -129,6 +152,13 @@ async def _grant_status(
         expires_at=expires_at,
         days_until_expiry=days_until,
         expiry_warning=_expiry_warning(expires_at, days_until),
+        soft_limit_tokens=soft_limit,
+        soft_limit_reached=soft_limit is not None and tracked >= soft_limit,
+        hard_limit_reached=hard_reached,
+        expired=expired,
+        allow_paid_after_grant=settings.glm_allow_paid_after_grant,
+        enforcement=enforcement,
+        enforcement_reason=enforcement_reason,
     )
 
 
@@ -207,7 +237,12 @@ async def usage_stats(
     # 节点名与 GLM embedding 的 provider 名，都走通用资源包
     grants = [
         await _grant_status(
-            db, user_id, "glm_air", ["glm_air"], settings.glm_air_grant_total_tokens
+            db,
+            user_id,
+            "glm_air",
+            ["glm_air"],
+            settings.glm_air_grant_total_tokens,
+            soft_limit=settings.glm_air_soft_limit_tokens,
         ),
         await _grant_status(
             db,
@@ -215,6 +250,7 @@ async def usage_stats(
             "glm_general",
             ["glm_flash", "glm"],
             settings.glm_general_grant_total_tokens,
+            soft_limit=settings.glm_general_soft_limit_tokens,
         ),
     ]
 

@@ -27,13 +27,38 @@ const LEVEL_LABELS: Record<string, string> = {
   exhausted: "应用侧估算已耗尽（以控制台余额为准）",
 };
 
+// 熔断状态横幅：区分「额度熔断（耗尽）」「资源包到期」「接近耗尽让位」（§12.3）
+function enforcementBanner(g: GrantStatus): string | null {
+  if (g.enforcement === "blocked") {
+    const why = g.enforcement_reason === "expired" ? "资源包已到期" : "额度已耗尽";
+    return `额度熔断：${why}，已停止调用 Air（GLM_ALLOW_PAID_AFTER_GRANT=false，禁止静默付费）`;
+  }
+  if (g.enforcement === "high_value_only") {
+    const why =
+      g.expired || g.hard_limit_reached
+        ? "资源包已到期/耗尽，仅高价值任务允许付费续用 Air"
+        : "资源包接近耗尽，Air 仅用于高价值任务（纪要生成/编辑）";
+    return `${why}，QA 等已切换免费模型`;
+  }
+  if (g.soft_limit_reached) {
+    return "资源包接近耗尽（已达软上限）";
+  }
+  return null;
+}
+
 function GrantCard({ g }: { g: GrantStatus }) {
   const ratio = Math.min(g.usage_ratio, 1);
   const barColor =
     g.usage_ratio >= 0.95 ? "#c0392b" : g.usage_ratio >= 0.7 ? "#e67e22" : "#27ae60";
+  const banner = enforcementBanner(g);
   return (
     <div className="card">
       <h3 style={{ marginTop: 0 }}>{GRANT_LABELS[g.name] ?? g.name}</h3>
+      {banner && (
+        <div className="error" style={{ marginBottom: 8 }}>
+          ⛔ {banner}
+        </div>
+      )}
       {g.expiry_warning && (
         <div className="error" style={{ marginBottom: 8 }}>
           ⚠ {g.expiry_warning}

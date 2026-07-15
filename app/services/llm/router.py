@@ -92,12 +92,35 @@ class LLMRouter:
             latency_ms=latency_ms,
         )
 
+    async def _routable_providers(self) -> list[LLMProvider]:
+        """额度熔断过滤（Tech Design M4 §12.3）：调用时即时判定。
+
+        过滤后无 provider 可用时抛出带熔断原因的 LLMExhaustedError——
+        错误文案与模型故障（transport/schema）可区分，并落一条审计记录。
+        """
+        from app.services.llm.quota import filter_providers
+
+        providers, note = await filter_providers(self.providers, self.task_type)
+        if note:
+            logger.warning("%s (task=%s)", note, self.task_type)
+        if not providers:
+            await record_usage(
+                task_type=self.task_type,
+                provider="glm_air",
+                model="-",
+                success=False,
+                error_type="quota",
+                error_message=note,
+            )
+            raise LLMExhaustedError(note or "no provider available after quota filter")
+        return providers
+
     async def generate_json(
         self, system: str, user: str, schema: type[T]
     ) -> tuple[T, LLMResponse]:
         """结构化输出：JSON 解析 + pydantic schema 校验，失败自动重试/降级。"""
         errors: list[str] = []
-        for index, provider in enumerate(self.providers):
+        for index, provider in enumerate(await self._routable_providers()):
             prompt = user
             for attempt in (1, 2):
                 started = time.monotonic()
@@ -152,7 +175,7 @@ class LLMRouter:
     async def generate_text(self, system: str, user: str) -> LLMResponse:
         """纯文本输出（结构化失败后的降级路径）。"""
         errors: list[str] = []
-        for index, provider in enumerate(self.providers):
+        for index, provider in enumerate(await self._routable_providers()):
             started = time.monotonic()
             try:
                 resp, latency_ms = await self._call(

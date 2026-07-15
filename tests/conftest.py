@@ -126,6 +126,11 @@ def auth_headers(client) -> dict[str, str]:
 def _mock_providers(monkeypatch):
     """测试环境统一走 mock provider，不受本机 .env 配置影响，
     避免真实 ASR 推理与 LLM 网络调用。"""
+    # 配额快照缓存跨测试失效：上一个测试 seed 的高用量不得影响下一个
+    from app.services.llm import quota
+
+    quota.invalidate_cache()
+    monkeypatch.setattr(settings, "glm_quota_cache_ttl_seconds", 0)
     monkeypatch.setattr(settings, "llm_providers", "mock")
     # 清空云端 key：task_based 任务路由（glm_air 等）全部不可用，
     # build_router 回退 LLM_PROVIDERS=mock——不受本机 .env 影响
