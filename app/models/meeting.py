@@ -28,3 +28,7 @@ class Meeting(UUIDPkMixin, TimestampMixin, Base):
     host: Mapped[str | None] = mapped_column(String(255))
     recorder: Mapped[str | None] = mapped_column(String(255))
     importance: Mapped[str | None] = mapped_column(String(32))  # 一般/重要/加急
+    # 本会议 segment 向量的生成模型身份（"provider/model:dim"，RAG 设计 §4.1.1-G）。
+    # 同维不同模型的向量空间不通，只比维度会静默错检索——身份不符即整场重嵌。
+    # 空 = 旧数据或尚未嵌入，首次问答时重嵌并回填
+    embedding_model_key: Mapped[str | None] = mapped_column(String(128))

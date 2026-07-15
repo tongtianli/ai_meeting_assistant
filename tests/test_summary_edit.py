@@ -192,22 +192,15 @@ def test_intent_failure_falls_back_to_query(tmp_path, monkeypatch) -> None:
         headers = auth_headers(client)
         mid = _done_meeting(client, headers)
 
-    # 意图分类的 router 挂掉 → 回退 query，不影响回答
+    # 意图分类的 router 挂掉 → 回退 query + 原问题，不影响回答
     import app.services.qa as qa_mod
-    from app.services.llm import LLMExhaustedError
+    from app.services.query_intent import IntentResult
 
-    async def _broken_intent(message: str) -> str:
-        raise LLMExhaustedError("classifier down")
+    async def _fallback_intent(question, recent, speakers, cited=None):
+        # 模拟 classify_and_rewrite 内部 LLMExhausted 后的降级结果
+        return IntentResult("query", question, False, False)
 
-    async def _fallback_intent(message: str) -> str:
-        try:
-            return await _broken_intent(message)
-        except LLMExhaustedError:
-            return "query"
-
-    # 直接验证 classify_intent 的回退语义：patch build_router 只对 intent 生效不好隔离，
-    # 故此处 patch classify_intent 模拟"分类失败已回退"后的行为路径
-    monkeypatch.setattr(qa_mod, "classify_intent", _fallback_intent)
+    monkeypatch.setattr(qa_mod, "classify_and_rewrite", _fallback_intent)
 
     with TestClient(app) as client:
         headers = auth_headers(client)

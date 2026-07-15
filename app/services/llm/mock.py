@@ -76,9 +76,21 @@ class MockLLMProvider(LLMProvider):
             # 确定性：把所有可疑项判为误报（confirmed 空）——hybrid 测试据此
             # 断言裁判过滤掉规则误报
             text = json.dumps({"confirmed": []}, ensure_ascii=False)
-        elif "意图分类器" in system:  # 意图路由分支（SYSTEM_INTENT 稳定标记）
-            is_edit = any(k in user for k in ("改", "删", "换", "合并", "加上"))
-            text = json.dumps({"intent": "edit" if is_edit else "query"})
+        elif "意图分类器" in system:  # 意图+改写分支（SYSTEM_INTENT 稳定标记）
+            # 只对"当前问题"做关键词判定（历史消息里的动词不算数）
+            m = re.search(r"当前问题：(.+)\s*$", user, re.S)
+            question = (m.group(1) if m else user).strip()
+            is_edit = any(k in question for k in ("改", "删", "换", "合并", "加上"))
+            # 确定性指代消解：多轮（带历史块）且问题含 他/她 时，用名单第一个名字替换
+            standalone = question
+            if "最近的用户提问" in user and re.search(r"[他她]", question):
+                nm = re.search(r"说话人名单：([^\n、]+)", user)
+                if nm:
+                    standalone = re.sub(r"[他她]", nm.group(1).strip(), question)
+            text = json.dumps(
+                {"intent": "edit" if is_edit else "query", "standalone_query": standalone},
+                ensure_ascii=False,
+            )
         elif "纪要编辑器" in system:  # 改纪要分支（SYSTEM_SUMMARY_EDIT 稳定标记）
             edited = dict(_SUMMARY_JSON)
             edited["decisions"] = ["【已修改】下周完成上传接口开发并同步验收标准"]

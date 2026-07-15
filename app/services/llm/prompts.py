@@ -138,17 +138,22 @@ def plain_text_prompt(transcript: str) -> str:
 
 
 # AI 会议问答（RAG，PRD Feature 5）。"会议问答助手" 是稳定标记，供 mock 识别。
+# 最小证据不足拒答（RAG 设计 §4.1.1-F）：宁可拒答，不得凭常识补全。
 SYSTEM_QA = (
     "你是一名会议问答助手。你只输出合法的 JSON 对象，不输出 markdown 或其他内容。"
-    "只依据给定的会议转录片段回答问题，不得臆造未出现的信息；"
+    "只依据本轮给定的会议转录片段回答问题，不得臆造未出现的信息；"
+    "禁止根据常识、会议标题、历史回答或任何片段之外的内容补全事实。"
+    "日期、金额、负责人、版本号和最终决策必须有直接的片段引用依据。"
     "引用依据时使用片段行首方括号内的 segment 编号（seq）。"
-    "若给定片段不足以回答，如实说明未找到相关内容。"
+    "若给定片段不足以回答，回答'会议原文中没有找到明确结论'，"
+    "并置 insufficient_evidence 为 true、引用留空。"
 )
 
 _QA_SCHEMA_DESC = """输出 JSON 对象，字段如下：
 {
-  "answer": "对问题的回答（简洁中文；无法回答则说明未在会议中找到相关内容）",
-  "cited_segment_seqs": [引用到的 segment 编号（整数）列表，无则空数组]
+  "answer": "对问题的回答（简洁中文；证据不足则回答'会议原文中没有找到明确结论'）",
+  "cited_segment_seqs": [引用到的 segment 编号（整数）列表，无则空数组],
+  "insufficient_evidence": 布尔值（片段不足以回答时为 true，此时引用必须为空数组）
 }"""
 
 
@@ -160,19 +165,49 @@ def qa_prompt(question: str, segment_lines: str) -> str:
     )
 
 
-# 聊天意图路由（PRD §7.1 步骤 1）。"意图分类器" 是稳定标记，供 mock 识别。
+# 聊天意图路由 + 多轮问题改写（PRD §7.1 / RAG 设计 §4.1.1-A：一次调用同时产出）。
+# "意图分类器" 是稳定标记，供 mock 识别。
 SYSTEM_INTENT = (
-    "你是一个意图分类器。你只输出合法的 JSON 对象。"
-    "判断用户在会议助手聊天框里发的这条消息意图："
+    "你是一个意图分类器与问题改写器。你只输出合法的 JSON 对象。"
+    "任务一：判断用户在会议助手聊天框里发的这条消息意图——"
     "查询会议内容（query）还是要求修改会议纪要（edit）。"
-    '输出 {"intent": "query"} 或 {"intent": "edit"}。'
     "只有明确要求改动纪要内容（增删改措辞、合并议题、调整 TODO 等）才算 edit；"
     "提问、追溯、总结类一律 query。"
+    "任务二（仅当给出对话历史时）：把当前问题改写为一个不依赖上下文、"
+    "可独立检索的完整问题（standalone_query），解析其中的代词与省略指代。"
+    "改写只能使用历史用户消息、引用原文和说话人名单中出现过的人名与事实，"
+    "不得虚构；助手历史回答只用于理解指代，不作为人名、日期、金额或结论的事实来源。"
+    "无需改写或没有历史时，standalone_query 返回原问题。"
+    '输出 {"intent": "query"|"edit", "standalone_query": "..."}'
 )
 
 
 def intent_prompt(message: str) -> str:
-    return f"用户消息：{message}"
+    return f"当前问题：{message}"
+
+
+def intent_rewrite_prompt(
+    message: str,
+    recent_user_messages: list[str],
+    speaker_names: list[str],
+    cited_texts: list[str] | None = None,
+) -> str:
+    """多轮场景的合并意图+改写 prompt（§4.1.1-B）。
+
+    cited_texts 仅在当前问题含指代表达时传入（上一轮合法引用的原文），
+    作为解析指代的事实语境。
+    """
+    parts = ["以下是本次会议聊天的上下文，用于解析当前问题中的指代："]
+    if recent_user_messages:
+        history = "\n".join(f"- {m}" for m in recent_user_messages)
+        parts.append(f"最近的用户提问（从旧到新）：\n{history}")
+    if speaker_names:
+        parts.append("本会议的说话人名单：" + "、".join(speaker_names))
+    if cited_texts:
+        quotes = "\n".join(f"> {t}" for t in cited_texts)
+        parts.append(f"上一轮回答引用的会议原文（事实语境）：\n{quotes}")
+    parts.append(f"当前问题：{message}")
+    return "\n\n".join(parts)
 
 
 # 聊天改纪要（PRD §7.1 步骤 2）。"纪要编辑器" 是稳定标记，供 mock 识别。

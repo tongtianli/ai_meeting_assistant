@@ -135,10 +135,30 @@ class Settings(BaseSettings):
     glm_embedding_model: str = "embedding-3"
     gemini_embedding_model: str = "text-embedding-004"
     embedding_batch_size: int = 32
-    qa_top_k: int = 6  # 每次提问检索的 segment 数
+    qa_top_k: int = 6  # 向量召回 anchor 数
     # 问题命中说话人真名时，额外并入的片段数（说话人感知混合检索，
-    # 每位命中的说话人独立取 top-k，多人同问不互相挤占）
+    # 每位命中的说话人独立取 top-k，多人同问不互相挤占）。
+    # 已由 qa_speaker_top_k_per_person 取代（语义相同、名字更明确），
+    # 本名保留一版做兼容 fallback
     qa_speaker_top_k: int = 6
+    # ---- RAG Phase 1（TECH_DESIGN_MEETING_RAG_V1 §4.1.1）----
+    qa_speaker_top_k_per_person: int | None = None  # None → 沿用 qa_speaker_top_k
+    qa_max_speaker_persons: int = 4  # 匹配说话人数上限，超出按首次出现序截断
+    qa_min_speaker_anchors_per_person: int = 1  # 每个命中 person 的保底 speaker anchor
+    qa_neighbor_window: int = 2  # anchor 邻居 ± 窗口
+    qa_max_context_segments: int = 24  # 最终 context 上限（anchor 优先预算）
+    qa_rewrite_recent_messages: int = 6  # 改写输入的最近用户消息条数
+    qa_rewrite_cited_max_segments: int = 3  # 指代改写附带的上轮引用原文数上限
+    qa_rewrite_cited_max_chars: int = 1200  # 附带引用原文的字符预算
+    qa_retrieval_debug_text: bool = False  # true 才在检索日志记录问题明文
+
+    @property
+    def qa_per_person_k(self) -> int:
+        return (
+            self.qa_speaker_top_k_per_person
+            if self.qa_speaker_top_k_per_person is not None
+            else self.qa_speaker_top_k
+        )
 
     @model_validator(mode="after")
     def _validate_chunking(self) -> "Settings":
