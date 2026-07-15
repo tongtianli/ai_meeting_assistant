@@ -26,6 +26,34 @@ _ALNUM_RE = re.compile(r"[A-Za-z][A-Za-z0-9]+|\d+(?:\.\d+)?%?")
 # 责任人多值分隔符
 _OWNER_SPLIT = re.compile(r"[、,，/]+")
 
+# 中文专名候选提取（范文污染检测的实体白名单式方案）——只抽"专名形状"的串，
+# 不做全量中文切词，避免把"同步推进""严格执行"等风格词误判为事实泄漏。
+# 引号内项目/专名
+_QUOTE_RE = re.compile(r"[「『“”‘’《〈]([^」』“”‘’》〉]{2,12})[」』“”‘’》〉]")
+# 带机构/项目/地点后缀的实体（后缀前需 ≥2 个汉字）。只用多字、低歧义后缀：
+# 单字后缀（部/局/处/科/组）会误吞"剩余部分""全部"等常用词，故一律不用
+_ENTITY_RE = re.compile(
+    r"[一-鿿]{2,8}(?:分公司|公司|集团|事业部|研究院|研究所|部门|项目组|项目|"
+    r"中心|园区|大厦|酒店|银行|大学|学院|医院|工厂|办公室)"
+)
+# 职务锚定的中文人名：捕获职务前的 2~3 字姓名
+_NAME_RE = re.compile(
+    r"([一-鿿]{2,3})(?:董事长|副总经理|总经理|副总|总监|部长|处长|"
+    r"科长|组长|主管|经理|主任|工程师|老师|先生|女士|同志)"
+)
+
+
+def _proper_noun_candidates(text: str) -> set[str]:
+    """从范文中抽取"专名形状"候选（引号内容 / 带机构后缀实体 / 职务锚定人名）。"""
+    cands: set[str] = set()
+    for m in _QUOTE_RE.finditer(text):
+        cands.add(m.group(1))
+    for m in _ENTITY_RE.finditer(text):
+        cands.add(m.group(0))
+    for m in _NAME_RE.finditer(text):
+        cands.add(m.group(1))
+    return cands
+
 # 判定失败时给裁判的转录节选上限（避免"全文裁判"）
 _JUDGE_EXCERPT_CHARS = 6000
 
@@ -96,12 +124,12 @@ def _summary_body(content: SummaryContent) -> str:
 
 
 def _grounded(text: str, transcript: str) -> bool:
-    """text（可能是顿号分隔的多责任人）整体或任一分量在逐字稿出现即算有依据。"""
+    """有依据判定：整体精确命中走快速路径；否则拆分后**每个**非空分量都须
+    在逐字稿出现（多责任人"张三、李四"里只要有一人是虚构的就判为无依据）。"""
     if text in transcript:
         return True
-    return any(
-        part and part in transcript for part in _OWNER_SPLIT.split(text)
-    )
+    parts = [p for p in _OWNER_SPLIT.split(text) if p]
+    return bool(parts) and all(p in transcript for p in parts)
 
 
 def check_rules(
@@ -121,10 +149,12 @@ def check_rules(
         if t.source_segment_seq is not None and t.source_segment_seq not in segment_seqs
     ]
 
-    # 2) 范文污染：范例独有（逐字稿没有）的事实型 token 泄漏进纪要
+    # 2) 范文污染：范例独有（逐字稿没有）的事实型记号泄漏进纪要。
+    # 候选 = 拉丁词/数字（项目代号、KPI 值）+ 中文专名（引号名/机构实体/职务人名）；
+    # 不做全量中文切词，避免风格词（"同步推进"等）误报
     example_tokens: set[str] = set()
     for ex in examples or []:
-        for tok in _ALNUM_RE.findall(ex):
+        for tok in set(_ALNUM_RE.findall(ex)) | _proper_noun_candidates(ex):
             if tok not in transcript_text:
                 example_tokens.add(tok)
     report.example_leaks = sorted(t for t in example_tokens if t in body)
@@ -148,6 +178,22 @@ def check_rules(
     return report
 
 
+def _evidence_excerpt(suspects: list[str], transcript_text: str) -> str:
+    """为裁判挑选与可疑项相关的证据窗口（含该关键词的转录行），而非一律取开头。
+
+    可疑项形如 "owner:张三"/"deadline:下周三"/"45%"/"Alpha"——取冒号后的关键词
+    匹配转录行；无命中则回退到开头节选，整体不超过上限（避免"全文裁判"）。
+    """
+    terms = [s.split(":", 1)[-1] for s in suspects]
+    hits = [
+        ln
+        for ln in transcript_text.split("\n")
+        if any(t and t in ln for t in terms)
+    ]
+    excerpt = "\n".join(hits) if hits else transcript_text
+    return excerpt[:_JUDGE_EXCERPT_CHARS]
+
+
 async def _judge(suspects: list[str], transcript_text: str) -> set[str] | None:
     """LLM 裁判复核可疑项，返回确认为真问题的子集；失败返回 None（fail-open）。"""
     # 延迟导入：避免与 llm 包的加载顺序耦合
@@ -157,7 +203,7 @@ async def _judge(suspects: list[str], transcript_text: str) -> set[str] | None:
     try:
         verdict, _ = await build_router(LLMTaskType.QUALITY_CHECK).generate_json(
             SYSTEM_QUALITY_JUDGE,
-            quality_judge_prompt(suspects, transcript_text[:_JUDGE_EXCERPT_CHARS]),
+            quality_judge_prompt(suspects, _evidence_excerpt(suspects, transcript_text)),
             JudgeVerdict,
         )
         return set(verdict.confirmed)

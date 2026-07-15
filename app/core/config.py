@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -138,6 +139,21 @@ class Settings(BaseSettings):
     # 问题命中说话人真名时，额外并入的片段数（说话人感知混合检索，
     # 每位命中的说话人独立取 top-k，多人同问不互相挤占）
     qa_speaker_top_k: int = 6
+
+    @model_validator(mode="after")
+    def _validate_chunking(self) -> "Settings":
+        """分块参数在启动阶段即校验，避免环境变量错误让摘要管线除零/异常分块。"""
+        if self.summary_chars_per_token <= 0:
+            raise ValueError("SUMMARY_CHARS_PER_TOKEN 必须 > 0")
+        if self.summary_chunk_target_tokens <= 0:
+            raise ValueError("SUMMARY_CHUNK_TARGET_TOKENS 必须 > 0")
+        if self.summary_chunk_max_tokens < self.summary_chunk_target_tokens:
+            raise ValueError(
+                "SUMMARY_CHUNK_MAX_TOKENS 必须 >= SUMMARY_CHUNK_TARGET_TOKENS"
+            )
+        if self.summary_chunk_overlap_segments < 0:
+            raise ValueError("SUMMARY_CHUNK_OVERLAP_SEGMENTS 必须 >= 0")
+        return self
 
 
 settings = Settings()

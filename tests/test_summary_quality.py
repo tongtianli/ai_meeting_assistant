@@ -4,8 +4,23 @@
 """
 import asyncio
 
+import pytest
+from pydantic import ValidationError
+
+from app.core.config import Settings
 from app.schemas.summary import SummaryContent, TodoItem, TopicGroup
 from app.services.summary_quality import check_rules, run_quality_check
+
+
+def test_chunking_config_validation() -> None:
+    with pytest.raises(ValidationError):
+        Settings(summary_chars_per_token=0)
+    with pytest.raises(ValidationError):
+        Settings(summary_chunk_target_tokens=0)
+    with pytest.raises(ValidationError):
+        Settings(summary_chunk_max_tokens=100, summary_chunk_target_tokens=200)
+    with pytest.raises(ValidationError):
+        Settings(summary_chunk_overlap_segments=-1)
 
 
 def _content(**kw) -> SummaryContent:
@@ -71,6 +86,54 @@ def test_grounded_owner_not_flagged() -> None:
     c = _content(todos=[TodoItem(task="做事", owner="speaker_001", deadline="周五")])
     r = check_rules(c, "[0] speaker_001: 周五之前给结论", {0}, None)
     assert r.ungrounded_owner_or_deadline == []
+
+
+def test_multi_owner_one_grounded_one_fabricated_is_flagged() -> None:
+    # 张三有依据、李四为虚构：整体不得判为有依据（回归 review：不能用 any）
+    c = _content(todos=[TodoItem(task="做事", owner="张三、李四")])
+    r = check_rules(c, "[0] 张三: 我来跟进这件事", {0}, None)
+    assert any("owner:张三、李四" in x for x in r.ungrounded_owner_or_deadline)
+    assert r.has_high_risk
+
+
+def test_multi_owner_all_grounded_not_flagged() -> None:
+    c = _content(todos=[TodoItem(task="做事", owner="张三、李四")])
+    r = check_rules(c, "张三 和 李四 一起负责", {0}, None)
+    assert r.ungrounded_owner_or_deadline == []
+
+
+def test_example_leak_chinese_project_name() -> None:
+    # 范文独有的中文项目名（带"项目"后缀）泄漏进纪要 → 高风险
+    c = _content(summary="本次决定推进启明星项目的落地。")
+    r = check_rules(
+        c, "会议讨论了新产品的开发计划", {0}, examples=["历史纪要：启明星项目已通过评审"]
+    )
+    assert "启明星项目" in r.example_leaks
+    assert r.has_high_risk
+
+
+def test_example_leak_chinese_person_name() -> None:
+    # 范文里"王建国经理"，人名"王建国"泄漏进纪要且逐字稿无 → 高风险
+    c = _content(summary="王建国负责后续对接。")
+    r = check_rules(
+        c, "会议由张伟主持，讨论对接事宜", {0}, examples=["上季度纪要：王建国经理牵头验收"]
+    )
+    assert "王建国" in r.example_leaks
+    assert r.has_high_risk
+
+
+def test_style_phrase_not_flagged_as_leak() -> None:
+    # 风格惯用语（非专名形状）即使范文/纪要都有、逐字稿没有，也不算污染
+    c = _content(topics=[TopicGroup(title="要求", items=["相关工作同步推进。"])])
+    r = check_rules(c, "会议布置了若干任务", {0}, examples=["范例：各项工作同步推进"])
+    assert r.example_leaks == []
+
+
+def test_common_word_with_single_char_suffix_not_flagged() -> None:
+    # "剩余部分"不得被当作"…部"实体误抽（单字后缀 部/局/处/科/组 已弃用）
+    c = _content(topics=[TopicGroup(title="进展", items=["剩余部分同步推进。"])])
+    r = check_rules(c, "会议同步了进展", {0}, examples=["范例：剩余部分按计划推进"])
+    assert r.example_leaks == []
 
 
 # ---- 模式分派 ----

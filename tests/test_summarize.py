@@ -125,6 +125,8 @@ def test_long_meeting_map_reduce_dedup(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "summary_chunk_max_tokens", 40)
     monkeypatch.setattr(settings, "summary_chunk_overlap_segments", 2)
     monkeypatch.setattr(settings, "summary_chars_per_token", 1.0)
+    # 与其他测试可能留下的用户级范例隔离：本测试只验分块/去重管线
+    monkeypatch.setattr(settings, "summary_examples_max_count", 0)
 
     import app.services.summarize as summarize_mod
 
