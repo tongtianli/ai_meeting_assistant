@@ -70,11 +70,13 @@ LLM 生成回答
 
 本阶段包含：
 
-1. 多轮问题改写；
-2. 检索命中后的邻居 segment 扩展；
-3. 多说话人分别召回；
-4. 基本检索元数据记录；
-5. 对应单元测试和集成测试。
+1. 多轮问题改写（与意图分类合并为一次调用）；
+2. 检索命中后的邻居 segment 扩展（anchor 优先预算）；
+3. 多说话人分别召回（含每人保底 speaker anchor）；
+4. 最小证据不足拒答；
+5. embedding 模型身份校验（唯一一列迁移）；
+6. 基本检索元数据记录（默认脱敏）；
+7. 对应单元测试和集成测试。
 
 本阶段不包含：
 
@@ -84,7 +86,83 @@ LLM 生成回答
 - 新建 TranscriptChunk 表；
 - Graph RAG；
 - 跨会议检索；
-- 更换向量数据库。
+- 更换向量数据库；
+- `app/services/retrieval/` 目录 package 化（留 Phase 2）。
+
+> **本文的权威修订见下方 §4.1.1**（PR #16 评审后与人工确认）。当 §4.1.1 与
+> §4.2–§4.8 的细节冲突时，**以 §4.1.1 为准**。
+
+### 4.1.1 Phase 1 定稿修订（评审已确认，优先于 §4.2–§4.8 的细节）
+
+> 来源：PR #16《RAG v1 技术设计 review 修订提案》讨论定案。与下文冲突时以本节为准。
+
+**A. 意图识别与查询改写合并为一次 LLM 调用**
+
+- 保留现有二值意图 `query` / `edit`（**不引入 `other`、不重命名 `edit`**）；仅在意图分类的结构化输出中新增 `standalone_query`。
+- 无历史消息：直接用原始问题作 `standalone_query`，不额外调用模型。
+- 有历史消息：意图分类 + 改写**合并为一次** `INTENT_CLASSIFY` 调用，输出 `{intent, standalone_query}`。
+- 结构化输出失败：降级为原始问题 + 默认 `query`，不阻塞问答。
+- 不新增独立 `QUERY_REWRITE` 串行调用点。
+- 时序：`handle_chat` 先 commit 用户消息再分类，加载"最近 N 条"须在插入前取历史，或按 `message_id` 排除当前消息。
+
+**B. 改写上下文（按需补引用证据）**
+
+- 默认输入：最近 N 条**用户**消息 + 上一轮 `standalone_query` + 当前会议说话人名单。
+- **指代门控**：本轮命中「他 / 她 / 它 / 这个 / 那个 / 该方案 / 后来 / 那件事 / 上面说的」等指代标记时，才附带上一轮**合法 `cited_segment_ids` 的少量原文**（`QA_REWRITE_CITED_MAX_SEGMENTS` 默认 3 + 字符预算）；无指代不附带，省 token。
+- cited 原文作事实语境；assistant 自由文本仅作指代参考，**不作**人名 / 日期 / 金额 / 结论的事实来源（写进 prompt 硬约束）。
+
+**C. 说话人匹配用「原问题 ∪ 改写问题」并集**
+
+- `matched = match_people(original_question) | match_people(standalone_query)`——改写可能遗漏原问题里的第二个人名。
+- 改写臆造、且在原问题 / 历史用户消息 / 合法引用原文中均不存在的人名，**不得**作为强 speaker 召回条件，记为可疑并忽略。
+
+**D. anchor 优先的上下文预算（替换 §4.4 的"按 seq 排序后简单截断"）**
+
+- 区分"优先级选择"与"最终展示顺序"：
+  1. 按融合排名（Phase 1 = 合并去重后的列表序）先纳入每个 anchor **自身**；
+  2. 按距离 ±1、±2… **逐圈**为各 anchor 补邻居（不是一个 anchor 一次吃满窗口）；
+  3. 达 `QA_MAX_CONTEXT_SEGMENTS` 即停；
+  4. **仅在选择完成后**按 `seq` 排序喂给 LLM。
+- `max_segments < anchor 数`时保留最高排名 anchors 并记录淘汰数；anchor 优先级恒高于邻居；按 seq 排序只影响展示、不影响取舍。
+
+**E. vector / speaker anchor 保底配额（策略 a）**
+
+- 每个明确命中的 person（受 `QA_MAX_SPEAKER_PERSONS` 限制，按在问题中首次出现序）先取 `QA_MIN_SPEAKER_ANCHORS_PER_PERSON`（默认 1）条 speaker anchor 设为**受保护**，最先进入 anchor 集合。
+- 其余按「vector（距离序）+ 剩余 speaker」去重后追加其后，构成 D 的 `anchors_by_rank`。
+- 保证点名问题（"王建国说了什么"）的 speaker anchor 不被 vector 挤掉，语义问题仍保留最强 vector anchor。**不引入 RRF**（跨源融合留 Phase 2）。
+
+**F. 最小证据不足拒答（提前到 Phase 1）**
+
+- QA prompt 硬约束：只依据本轮 context 作答；无明确证据答"会议原文中没有找到明确结论"；**禁止**据常识 / 会议标题 / assistant 历史 / 范文补全；日期 / 金额 / 负责人 / 版本号 / 决策须有直接引用。
+- `QaAnswer` 加可选 `insufficient_evidence: bool = False`（向后兼容，前端忽略未知字段）。程序规则：`insufficient_evidence=false` 的事实性回答须有 ≥1 条**本轮 context 内**的合法引用，否则回退拒答；非法引用不接受。**不硬拒**合法的"未找到"。
+
+**G. embedding 模型身份校验（提前到 Phase 1）**
+
+- `meetings` 增一列 `embedding_model_key`（格式如 `glm/embedding-3:1024`）——**Phase 1 唯一迁移**。
+- `ensure_embeddings` 的 stale 判断 = 任一向量为空 **OR** 维度不符 **OR 模型身份不符**；身份变化对该会议整场重嵌。旧数据 `embedding_model_key` 为空视为 stale，首次访问重嵌并回填。
+- 存 `Meeting` 而非 `TranscriptSegment`：整场 all-or-nothing 重嵌下一列即可，避免逐 segment 重复存储。
+
+**H. 检索 metadata 与隐私**
+
+- Phase 1 走**结构化日志**（不加 schema）。默认字段：`question_hash`（sha256）、`standalone_query_changed`、各来源候选数、`anchor_count / kept_anchor_count / evicted_anchor_count`、`context_segment_count`、`truncated`、分段 `latency_ms`。
+- 明文（原始问题 / standalone_query）仅在 `QA_RETRIEVAL_DEBUG_TEXT=true` 时记录；**绝不**记 API Key / 整段逐字稿。
+
+**I. 配置项**
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `QA_TOP_K` | 6 | 向量 anchor 数（不变）|
+| `QA_SPEAKER_TOP_K_PER_PERSON` | 4 | 原 `qa_speaker_top_k` 改名（语义"每人 K"）；**旧名保留一版兼容** |
+| `QA_MAX_SPEAKER_PERSONS` | 4 | 匹配人数上限，超出按首次出现截断并记录 |
+| `QA_MIN_SPEAKER_ANCHORS_PER_PERSON` | 1 | 每个命中 person 的保底 speaker anchor |
+| `QA_NEIGHBOR_WINDOW` | 2 | 邻居 ± 窗口 |
+| `QA_MAX_CONTEXT_SEGMENTS` | 24 | 最终 context 上限 |
+| `QA_REWRITE_CITED_MAX_SEGMENTS` | 3 | 指代改写附带的上轮引用原文数上限 |
+| `QA_RETRIEVAL_DEBUG_TEXT` | false | 是否记录问题明文 |
+
+**J. 文件组织**：Phase 1 **不**做 `app/services/retrieval/` package 化；在 `qa.py` 内拆函数 + 新增 `query_intent.py`（合并意图 + 改写）。package 化留 Phase 2 三路候选 + RRF 落地时再评估。
+
+**K. Phase 1 测试增量**（在 §4.7 基础上补充）：无历史不触发额外改写调用；多轮一次调用同出 `intent` 与 `standalone_query`；改写失败降级原问题；assistant 错误历史不被固化为事实；原问题人名被改写遗漏仍参与 speaker 召回；改写臆造人名不成强 speaker 条件；高排名 anchor 位于会议末尾不因按 seq 截断丢失；anchor 优先于邻居；点名问题保底 speaker anchor 保留；无证据可拒答且不伪造引用；同维不同模型触发整场重嵌；默认日志不含问题明文。
 
 ### 4.2 多轮问题改写
 
@@ -149,9 +227,9 @@ async def rewrite_query(
   往返；用"有无历史"作为硬门控，把改写成本限制在真正的多轮追问上。
 - **历史加载时序**：`handle_chat` 先 commit 用户消息再作答，因此加载"最近 N 条"时会把
   当前这句也带进去。实现时应在插入前取历史，或按 message_id 排除当前消息。
-- **与意图分类的关系**：§7 的 `ChatIntent` 已带 `standalone_query` 字段，意图分类与查询
-  改写最终应收敛为**一次 LLM 调用**同时产出 `intent` 与 `standalone_query`。Phase 1 可先
-  各自独立实现，但两套 prompt 应朝合并方向演进，避免长期在热路径上多一次往返。
+- **与意图分类的关系（评审定稿：Phase 1 即合并，不分开实现）**：意图分类与查询改写
+  **在 Phase 1 就合并为一次 LLM 调用**同时产出 `intent` 与 `standalone_query`，不新增独立
+  `QUERY_REWRITE` 串行调用点。详见 §4.1.1-A。（原"Phase 1 可先各自独立实现"的说法已废弃。）
 
 ### 4.3 多说话人分别召回
 
@@ -212,6 +290,10 @@ QA_MAX_SPEAKER_PERSONS=4
 ```
 
 只命中 `[102]` 时，模型难以判断“下周三”对应正式上线还是测试版。
+
+> **注（评审定稿）**：下面的"按 seq 排序 → 限制数量"流程若实现为"排序后简单截断"，会丢掉
+> 会议后半段的高排名 anchor。**Phase 1 采用 §4.1.1-D 的 anchor 优先预算**（先按排名纳入 anchor
+> 自身，再逐圈补邻居，最后才按 seq 排序仅用于展示），本节流程仅作背景。
 
 #### 推荐流程
 
