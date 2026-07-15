@@ -45,6 +45,16 @@ class GrantStatus(BaseModel):
     expires_at: datetime
     days_until_expiry: int
     expiry_warning: str | None = None  # §12.1：到期前 30/14/7/1 天提醒文案
+    # ---- 额度软限制与付费熔断（§12.3，Phase 3）----
+    soft_limit_tokens: int | None = None
+    soft_limit_reached: bool = False  # 管理端"资源包接近耗尽"
+    hard_limit_reached: bool = False  # 累计 ≥ 配置总量
+    expired: bool = False  # 资源包已过 GLM_GRANT_EXPIRES_AT
+    allow_paid_after_grant: bool = False
+    # 对路由的实际影响：none | high_value_only（Air 仅纪要生成/编辑）| blocked
+    enforcement: str = "none"
+    # blocked 的原因：exhausted | expired（区分额度熔断与资源包到期）
+    enforcement_reason: str | None = None
 
 
 class FailureOut(BaseModel):

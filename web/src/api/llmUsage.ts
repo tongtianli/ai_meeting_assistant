@@ -38,6 +38,13 @@ export interface GrantStatus {
   expires_at: string;
   days_until_expiry: number;
   expiry_warning: string | null;
+  soft_limit_tokens: number | null;
+  soft_limit_reached: boolean;
+  hard_limit_reached: boolean;
+  expired: boolean;
+  allow_paid_after_grant: boolean;
+  enforcement: string; // none | high_value_only | blocked
+  enforcement_reason: string | null; // exhausted | expired
 }
 
 export interface UsageFailure {

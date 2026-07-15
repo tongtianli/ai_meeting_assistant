@@ -108,6 +108,14 @@ class Settings(BaseSettings):
     glm_general_grant_total_tokens: int = 1_996_701
     glm_grant_expires_at: str = "2026-10-10T08:40:18+08:00"
 
+    # 额度软限制与付费熔断（Tech Design M4 §12.3，Phase 3）。应用侧按
+    # llm_usage_records 的账号级累计估算，不能完全阻止服务商计费——
+    # 必须同时在智谱控制台配置余额预警/停机保护
+    glm_allow_paid_after_grant: bool = False  # 到期/耗尽后是否允许继续调用 Air（付费）
+    glm_air_soft_limit_tokens: int = 11_400_000  # 达到后 Air 仅供高价值任务（95%）
+    glm_general_soft_limit_tokens: int = 1_890_000  # 通用包仅预警（embedding 不可降级混用）
+    glm_quota_cache_ttl_seconds: int = 60  # 配额快照缓存；0 = 每次调用都查库
+
     # AI 问答 RAG（PRD Feature 5）。embedding 不能像 LLM 那样降级混用
     # （不同模型向量空间不通），故单一 provider、无 fallback。
     embedding_provider: str = "glm"  # glm | gemini | mock（key 缺失时报错不降级）
