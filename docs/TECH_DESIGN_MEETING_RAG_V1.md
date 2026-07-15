@@ -142,19 +142,37 @@ async def rewrite_query(
 - 无历史上下文或问题已经完整时，允许原样返回。
 - 改写失败时降级为原始问题，不阻塞问答。
 
+#### 热路径与时序约束
+
+- **首轮直接跳过改写调用**：`recent_messages` 为空时无需调用 LLM，直接使用原始
+  `question`。判断"问题是否完整"本身若还要过一次模型，等于给每轮问答都加一次串行
+  往返；用"有无历史"作为硬门控，把改写成本限制在真正的多轮追问上。
+- **历史加载时序**：`handle_chat` 先 commit 用户消息再作答，因此加载"最近 N 条"时会把
+  当前这句也带进去。实现时应在插入前取历史，或按 message_id 排除当前消息。
+- **与意图分类的关系**：§7 的 `ChatIntent` 已带 `standalone_query` 字段，意图分类与查询
+  改写最终应收敛为**一次 LLM 调用**同时产出 `intent` 与 `standalone_query`。Phase 1 可先
+  各自独立实现，但两套 prompt 应朝合并方向演进，避免长期在热路径上多一次往返。
+
 ### 4.3 多说话人分别召回
 
-#### 问题
+#### 现状
 
-当前多个 `person_ids` 共用一个 `LIMIT`：
+当前 `qa.py::_retrieve` **已经按人独立召回**：对每个命中的 `person_id` 单独执行一次
+`ORDER BY distance LIMIT qa_speaker_top_k`，最后合并去重。因此"多人同问时候选被单人
+占满"的问题在 `dev` 上已不存在，本节不是修 bug。
 
 ```python
-WHERE person_id IN (...)
-ORDER BY distance
-LIMIT qa_speaker_top_k
+# 当前实现（已按人分配配额）
+for pid in person_ids:
+    boosted = ... base.where(person_id == pid).order_by(distance).limit(qa_speaker_top_k)
 ```
 
-用户询问“张三和李四分别怎么看这个方案”时，候选可能全部来自同一个人。
+#### 本阶段增量
+
+1. **人数上限与截断**：当问题匹配到的说话人过多时，按在问题中首次出现的顺序保留前
+   N 人，并在检索元数据中记录 `truncated=true`；
+2. **配置改名**：把 `qa_speaker_top_k` 语义显式化为"每人 K"，避免误读为全局配额；
+3. 顺带把这段召回抽成独立函数，便于 Phase 2 并入关键词候选。
 
 #### 推荐实现
 
@@ -169,13 +187,13 @@ async def retrieve_speaker_anchors(
     ...
 ```
 
-对每个 `person_id` 单独取 Top K，最后合并去重。
+对每个 `person_id` 单独取 Top K，最后合并去重（保持现有行为，仅补充人数上限与截断记录）。
 
 #### 配置建议
 
 ```text
 QA_TOP_K=6
-QA_SPEAKER_TOP_K_PER_PERSON=4
+QA_SPEAKER_TOP_K_PER_PERSON=4   # 现 qa_speaker_top_k 改名，语义为"每人 K"
 QA_MAX_SPEAKER_PERSONS=4
 ```
 
@@ -271,9 +289,15 @@ app/services/qa.py
 
 如果本阶段不希望调整目录，也至少在 `qa.py` 内拆成独立函数，避免 `_retrieve()` 同时承担召回、融合和上下文组装。
 
+> 注：Phase 1 的 `merge_and_dedupe` 只做简单合并去重，会在 Phase 2 被 `RetrievalCandidate` +
+> RRF（见 §5.3）替换。因此本阶段不必在合并/打分逻辑上过度投入，把 anchor 集合去重、
+> 保序输出即可。
+
 ### 4.6 检索元数据
 
-建议为 assistant 消息记录最小调试信息。优先使用已有 JSON metadata 字段；如果当前模型没有该字段，可先通过日志记录，后续再迁移到数据库。
+建议为 assistant 消息记录最小调试信息。注意 `ChatMessage` 当前**没有通用 metadata/JSONB
+字段**（仅有 `cited_segment_ids`），因此 Phase 1 先通过结构化日志记录，后续需要持久化时再
+加字段迁移，不在本阶段引入 schema 变更。
 
 建议结构：
 
@@ -352,10 +376,18 @@ app/services/qa.py
 patterns = {
     "version": r"\bv?\d+(?:\.\d+)+\b",
     "code": r"\b[A-Z]{2,10}-?\d+\b",
-    "number": r"\d+(?:\.\d+)?",
+    "amount": r"\d+(?:\.\d+)?\s*(?:万|亿|元|块|美元|USD|RMB)",  # 带单位才算金额
     "date": r"\d{1,2}\s*[月/-]\s*\d{1,2}",
 }
 ```
+
+> **不要用裸 `number` 模式** `\d+(?:\.\d+)?`：它会匹配几乎所有数字（seq、时长秒数、页码
+> 等噪声），再配 `ILIKE '%token%'` 会产出大量低价值候选，反而稀释 RRF。只在带单位/明确
+> 上下文（金额、编号、版本）时才提取数字。
+
+> **性能约束**：`ILIKE '%token%'` 带前导通配符用不上 B-tree 索引，会全表扫 transcript text。
+> 上关键词召回前**必须为 `transcript_segments.text` 建 `pg_trgm` GIN 索引**（`CREATE
+> EXTENSION pg_trgm` + `gin (text gin_trgm_ops)`），这是一条要写进迁移的硬性前置。
 
 中文普通词的分词检索后续再评估 `pg_jieba`、ParadeDB 或 Elasticsearch，不在第一版关键词召回中强制引入。
 
@@ -525,7 +557,23 @@ embedding_updated_at
 
 不要只依赖向量维度判断模型是否变化，因为不同模型可能维度相同。
 
-这部分建议作为独立 PR，不与 Phase 1 同时实现。
+### 8.1 当前实现的潜在错检索风险（建议提前处理）
+
+`qa.py::ensure_embeddings` 目前**只靠维度判断模型是否变化**：
+
+```python
+stale = any(s.embedding is None or len(s.embedding) != expected_dim for s in segments)
+```
+
+一旦换成**同维度的另一个 embedding 模型**（例如 `embedding-3` 与某个同为 1024 维的模型），
+问题向量与库内向量落在互不兼容的空间，检索会"看起来在跑、结果全错"，且**没有任何报错**。
+考虑到 Phase 1 重度依赖向量召回质量，这不是纯未来工作，而是懒加载路径上的一个静默缺陷。
+
+因此建议**把最小版的 `embedding_model` 标识记录提前到 Phase 1 或紧随其后**：在 segment（或
+meeting）上记下生成向量的 `embedding_model`，`ensure_embeddings` 同时比对**模型标识**而不仅是
+维度，模型变化即触发全量重嵌。完整的四字段元数据与管道化生成仍可作为独立 PR。
+
+这部分（除上述最小标识外）建议作为独立 PR，不与 Phase 1 同时实现。
 
 ## 9. Claude 执行说明
 
