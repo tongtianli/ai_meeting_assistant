@@ -63,8 +63,8 @@ function GrantCard({ g }: { g: GrantStatus }) {
       </div>
       <div className="muted" style={{ marginBottom: 8 }}>
         应用侧累计 {fmt(g.tracked_total_tokens)} / 配置总量{" "}
-        {fmt(g.grant_total_tokens)} tokens（{pct(g.usage_ratio)}）——仅为应用侧
-        估算，控制台余额是最终真值
+        {fmt(g.grant_total_tokens)} tokens（{pct(g.usage_ratio)}）——额度为
+        账号级共享（跨用户合计），且仅为应用侧估算，控制台余额是最终真值
       </div>
       <table>
         <tbody>
@@ -85,7 +85,7 @@ function GrantCard({ g }: { g: GrantStatus }) {
             </td>
           </tr>
           <tr>
-            <td>最近 7 天日均消耗</td>
+            <td>最近 7 天日均消耗（按活跃天数）</td>
             <td>{fmt(g.avg_daily_tokens_7d)} tokens</td>
           </tr>
           <tr>
@@ -128,8 +128,9 @@ export default function LlmUsagePage() {
       {stats && (
         <>
           <div className="muted" style={{ marginBottom: 12 }}>
-            累计 {fmt(stats.total_calls)} 次调用，{fmt(stats.total_tokens)}{" "}
-            tokens（成功与失败调用均计入审计）
+            当前用户累计 {fmt(stats.total_calls)} 次调用，
+            {fmt(stats.total_tokens)} tokens（成功与失败调用均计入审计；
+            以下统计仅含当前用户，资源包卡片为账号级）
           </div>
 
           {stats.grants.map((g) => (

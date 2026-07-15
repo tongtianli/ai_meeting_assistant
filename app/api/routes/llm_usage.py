@@ -55,21 +55,27 @@ def _expiry_warning(expires_at: datetime, days: int) -> str | None:
 
 
 async def _grant_status(
-    db: AsyncSession, name: str, providers: list[str], grant_total: int
+    db: AsyncSession, user_id: UUID, name: str, providers: list[str], grant_total: int
 ) -> GrantStatus:
     now = datetime.now(timezone.utc)
     token_sum = func.coalesce(func.sum(LlmUsageRecord.total_tokens), 0)
     in_providers = LlmUsageRecord.provider.in_(providers)
 
+    # 资源包额度绑定 GLM key，账号级共享：累计消耗/剩余/耗尽预测跨用户
+    # 统计（含未打用户标签的记录）——否则各用户各看一份"剩余"会同时超卖
     tracked = int(await db.scalar(select(token_sum).where(in_providers)) or 0)
 
-    # 每场会议平均消耗：只统计打上 meeting 标签的记录
+    # 每场会议平均消耗：当前用户打上 meeting 标签的记录（用户级指标）
     per_meeting = (
         await db.execute(
             select(
                 token_sum,
                 func.count(func.distinct(LlmUsageRecord.meeting_id)),
-            ).where(in_providers, LlmUsageRecord.meeting_id.is_not(None))
+            ).where(
+                in_providers,
+                LlmUsageRecord.meeting_id.is_not(None),
+                LlmUsageRecord.user_id == user_id,
+            )
         )
     ).one()
     meeting_tokens, meeting_count = int(per_meeting[0]), int(per_meeting[1])
@@ -84,16 +90,20 @@ async def _grant_status(
         else None
     )
 
-    # 最近 7 天平均每日消耗 → 预计耗尽日期
-    week_tokens = int(
-        await db.scalar(
-            select(token_sum).where(
+    # 最近 7 天平均每日消耗 → 预计耗尽日期（账号级）；
+    # 按窗口内实际活跃天数平均，避免系统刚上线时被空白天稀释
+    week_row = (
+        await db.execute(
+            select(
+                token_sum,
+                func.count(func.distinct(func.date_trunc("day", LlmUsageRecord.created_at))),
+            ).where(
                 in_providers, LlmUsageRecord.created_at >= now - timedelta(days=7)
             )
         )
-        or 0
-    )
-    avg_daily = round(week_tokens / 7) if week_tokens else None
+    ).one()
+    week_tokens, active_days = int(week_row[0]), int(week_row[1])
+    avg_daily = round(week_tokens / active_days) if week_tokens and active_days else None
     exhaustion_date = (
         (now + timedelta(days=remaining / avg_daily)).date()
         if avg_daily and avg_daily > 0
@@ -125,13 +135,16 @@ async def _grant_status(
 @router.get("/stats", response_model=UsageStatsOut)
 async def usage_stats(
     db: AsyncSession = Depends(get_db),
-    _user_id: UUID = Depends(require_user),
+    user_id: UUID = Depends(require_user),
 ) -> UsageStatsOut:
     success_count = func.sum(case((LlmUsageRecord.success.is_(True), 1), else_=0))
     fallback_count = func.sum(case((LlmUsageRecord.fallback_index > 0, 1), else_=0))
     in_sum = func.coalesce(func.sum(LlmUsageRecord.input_tokens), 0)
     out_sum = func.coalesce(func.sum(LlmUsageRecord.output_tokens), 0)
     total_sum = func.coalesce(func.sum(LlmUsageRecord.total_tokens), 0)
+    # 用户隔离：调用明细/失败列表只暴露当前用户自己的记录；
+    # 资源包额度是账号级共享指标，跨用户统计（见 _grant_status）
+    mine = LlmUsageRecord.user_id == user_id
 
     provider_rows = await db.execute(
         select(
@@ -143,6 +156,7 @@ async def usage_stats(
             out_sum,
             total_sum,
         )
+        .where(mine)
         .group_by(LlmUsageRecord.provider)
         .order_by(total_sum.desc())
     )
@@ -171,6 +185,7 @@ async def usage_stats(
             total_sum,
             func.avg(LlmUsageRecord.latency_ms),
         )
+        .where(mine)
         .group_by(LlmUsageRecord.task_type)
         .order_by(total_sum.desc())
     )
@@ -192,10 +207,11 @@ async def usage_stats(
     # 节点名与 GLM embedding 的 provider 名，都走通用资源包
     grants = [
         await _grant_status(
-            db, "glm_air", ["glm_air"], settings.glm_air_grant_total_tokens
+            db, user_id, "glm_air", ["glm_air"], settings.glm_air_grant_total_tokens
         ),
         await _grant_status(
             db,
+            user_id,
             "glm_general",
             ["glm_flash", "glm"],
             settings.glm_general_grant_total_tokens,
@@ -204,7 +220,7 @@ async def usage_stats(
 
     failures = await db.scalars(
         select(LlmUsageRecord)
-        .where(LlmUsageRecord.success.is_(False))
+        .where(LlmUsageRecord.success.is_(False), mine)
         .order_by(LlmUsageRecord.created_at.desc())
         .limit(20)
     )
@@ -223,7 +239,7 @@ async def usage_stats(
     ]
 
     totals = (
-        await db.execute(select(func.count(), total_sum))
+        await db.execute(select(func.count(), total_sum).where(mine))
     ).one()
 
     return UsageStatsOut(

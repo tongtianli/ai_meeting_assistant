@@ -210,26 +210,30 @@ def _seed_air_scenario() -> tuple[uuid.UUID, uuid.UUID]:
             [
                 # 两场会议各消耗 1M Air token
                 dict(
-                    meeting_id=m1, task_type="summary_final", provider="glm_air",
+                    meeting_id=m1, user_id=DEFAULT_USER_ID,
+                    task_type="summary_final", provider="glm_air",
                     model="glm-4.5-air", input_tokens=800_000, output_tokens=200_000,
                     total_tokens=1_000_000, success=True, fallback_index=0,
                     latency_ms=1200,
                 ),
                 dict(
-                    meeting_id=m2, task_type="summary_final", provider="glm_air",
+                    meeting_id=m2, user_id=DEFAULT_USER_ID,
+                    task_type="summary_final", provider="glm_air",
                     model="glm-4.5-air", input_tokens=900_000, output_tokens=100_000,
                     total_tokens=1_000_000, success=True, fallback_index=0,
                     latency_ms=1500,
                 ),
                 # Air 失败一次 → fallback 到 flash 成功
                 dict(
-                    meeting_id=m2, task_type="qa_answer", provider="glm_air",
+                    meeting_id=m2, user_id=DEFAULT_USER_ID,
+                    task_type="qa_answer", provider="glm_air",
                     model="glm-4.5-air", success=False, fallback_index=0,
                     error_type="transport", error_message="HTTP 429: rate limited",
                     latency_ms=300,
                 ),
                 dict(
-                    meeting_id=m2, task_type="qa_answer", provider="glm_flash",
+                    meeting_id=m2, user_id=DEFAULT_USER_ID,
+                    task_type="qa_answer", provider="glm_flash",
                     model="glm-4-flash", input_tokens=1000, output_tokens=200,
                     total_tokens=1200, success=True, fallback_index=1, latency_ms=800,
                 ),
@@ -283,6 +287,54 @@ def test_stats_endpoint_math() -> None:
     assert failures[0]["provider"] == "glm_air"
     assert failures[0]["error_type"] == "transport"
     assert "429" in failures[0]["error_message"]
+
+
+def test_stats_isolated_per_user_but_grant_shared() -> None:
+    """用户隔离：A 看不到 B 的明细/失败/会议；资源包额度账号级共享。"""
+    other_user, other_meeting = uuid.uuid4(), uuid.uuid4()
+    asyncio.run(
+        _seed(
+            [
+                # 当前用户（DEFAULT_USER）自己的一次成功调用
+                dict(
+                    meeting_id=uuid.uuid4(), user_id=DEFAULT_USER_ID,
+                    task_type="summary_final", provider="glm_air",
+                    model="glm-4.5-air", input_tokens=400, output_tokens=100,
+                    total_tokens=500, success=True, fallback_index=0,
+                ),
+                # 其他用户的成功与失败调用
+                dict(
+                    meeting_id=other_meeting, user_id=other_user,
+                    task_type="qa_answer", provider="glm_flash",
+                    model="glm-4-flash", input_tokens=8000, output_tokens=2000,
+                    total_tokens=10_000, success=True, fallback_index=0,
+                ),
+                dict(
+                    meeting_id=other_meeting, user_id=other_user,
+                    task_type="qa_answer", provider="glm_flash",
+                    model="glm-4-flash", success=False, fallback_index=0,
+                    error_type="transport", error_message="secret failure of B",
+                ),
+            ]
+        )
+    )
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        body = client.get("/api/llm-usage/stats", headers=headers).json()
+
+    # 明细统计只含当前用户：他人的调用/任务/失败一概不可见
+    assert body["total_calls"] == 1 and body["total_tokens"] == 500
+    assert {p["provider"] for p in body["by_provider"]} == {"glm_air"}
+    assert {t["task_type"] for t in body["by_task"]} == {"summary_final"}
+    assert body["recent_failures"] == []
+
+    grants = {g["name"]: g for g in body["grants"]}
+    # 资源包额度绑定共享的 GLM key：累计消耗跨用户统计
+    assert grants["glm_general"]["tracked_total_tokens"] == 10_000
+    assert grants["glm_air"]["tracked_total_tokens"] == 500
+    # 每场平均是用户级指标：不被他人的 1 万 token 会议污染
+    assert grants["glm_air"]["avg_tokens_per_meeting"] == 500
+    assert grants["glm_general"]["avg_tokens_per_meeting"] is None
 
 
 def test_grant_expiry_warning_levels(monkeypatch) -> None:
