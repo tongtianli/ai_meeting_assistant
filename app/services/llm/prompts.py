@@ -70,12 +70,41 @@ def single_pass_prompt(transcript: str, examples: list[str] | None = None) -> st
     )
 
 
+# 长会议 map 阶段的事实抽取系统提示。"事实抽取器" 是稳定标记，供 mock 识别。
+SYSTEM_MAP_EXTRACT = (
+    "你是一名会议事实抽取器。你只输出合法的 JSON 对象，不输出 markdown 或其他内容。"
+    "你的任务是从会议片段中抽取结构化事实，不做文风润色、不写会议总结叙述。"
+    "引用会议内容时必须使用行首方括号内的 segment 编号（seq），不要复述原文位置。"
+)
+
+# map 精简事实 schema（对应 MapFacts）：不含 title/participants/summary 叙述，省 token
+_MAP_SCHEMA_DESC = """输出 JSON 对象，字段如下（只抽取本部分出现的事实，不做润色）：
+{
+  "topics": [
+    {"title": "议题名称", "owner": "责任人（不明确则 null）", "items": ["要点1", "要点2"]}
+  ],
+  "decisions": ["本部分的决策事项（无则空数组）"],
+  "todos": [
+    {
+      "task": "待办事项",
+      "owner": "负责人（转录中的名字或 speaker 标签，不明确则 null）",
+      "deadline": "截止时间原文（如 '周五'，不明确则 null）",
+      "source_segment_seq": 该 TODO 来源的 segment 编号（整数，务必给出）
+    }
+  ],
+  "risks": ["提到的风险或隐患（无则空数组）"],
+  "open_questions": ["尚未有结论的待明确问题（无则空数组）"],
+  "source_segment_seqs": [本部分涉及的关键 segment 编号列表]
+}"""
+
+
 def map_prompt(transcript_chunk: str, part: int, total: int) -> str:
     return (
         f"以下是一场长会议转录的第 {part}/{total} 部分，"
         f"每行格式为 [seq] [时间] 说话人: 内容。\n\n{transcript_chunk}\n\n"
-        f"请提取本部分的阶段性纪要。{_SCHEMA_DESC}\n\n{_STYLE_RULES}\n"
-        "注意：只总结本部分内容；TODO 与决策可能跨部分延续，宁可多保留候选。"
+        f"请抽取本部分的结构化事实。{_MAP_SCHEMA_DESC}\n\n"
+        "注意：只抽取本部分内容，不要润色文风、不要写会议总结叙述；"
+        "TODO 与决策可能跨部分延续，宁可多保留候选。"
     )
 
 
@@ -83,13 +112,17 @@ def reduce_prompt(
     partial_summaries: list[str], examples: list[str] | None = None
 ) -> str:
     parts = "\n\n".join(
-        f"--- 第 {i + 1} 部分纪要 ---\n{p}" for i, p in enumerate(partial_summaries)
+        f"--- 第 {i + 1} 部分事实 ---\n{p}" for i, p in enumerate(partial_summaries)
     )
     return (
-        f"以下是同一场长会议按顺序分段生成的阶段性纪要（JSON）：\n\n{parts}\n\n"
-        f"请合并为一份完整的最终会议纪要：去重、合并同类议题（同一责任人的"
-        f"相关事项归入同一议题），跨段延续的 TODO 与决策不得丢失，"
-        f"保留原有的 source_segment_seq 引用。"
+        f"以下是同一场长会议按顺序分段抽取的结构化事实（JSON，每段为 MapFacts）：\n\n"
+        f"{parts}\n\n"
+        f"请据此合成一份完整的最终会议纪要。要求：\n"
+        f"- 去重合并：相邻部分因切块重叠会重复同一议题/TODO/决策，务必合并为一条，"
+        f"不得让同一事实在最终纪要里重复出现；\n"
+        f"- 同一责任人的相关事项归入同一议题；\n"
+        f"- 跨段延续的 TODO 与决策不得丢失，保留原有的 source_segment_seq 引用；\n"
+        f"- risks 与 open_questions 折入相关议题或会议总结，不要单独成字段、也不得丢弃。\n"
         f"{_SCHEMA_DESC}\n\n{_STYLE_RULES}{_examples_block(examples)}"
     )
 
@@ -156,4 +189,28 @@ def summary_edit_prompt(current_json: str, instruction: str) -> str:
         f"现有会议纪要（JSON）：\n\n{current_json}\n\n"
         f"用户修改指令：{instruction}\n\n"
         f"请输出修改后的完整纪要。{_SCHEMA_DESC}\n\n{_STYLE_RULES}"
+    )
+
+
+# 纪要质量裁判（Phase 4 hybrid 模式）。"质量审查员" 是稳定标记，供 mock 识别。
+# 只对规则已命中的可疑条目做二次判定（非全文），降低确定性规则的误报。
+SYSTEM_QUALITY_JUDGE = (
+    "你是一名会议纪要质量审查员。你只输出合法的 JSON 对象，不输出其他内容。"
+    "给你若干条从纪要中挑出的可疑条目，以及相关的会议转录片段。"
+    "判断每条可疑项是否为真实问题（纪要中出现了转录里没有依据的内容，"
+    "即幻觉或范文文风污染），还是其实有原文依据（误报）。"
+)
+
+_JUDGE_SCHEMA_DESC = """输出 JSON 对象，字段如下：
+{
+  "confirmed": [被确认为真实问题的可疑项原文列表（无则空数组）]
+}"""
+
+
+def quality_judge_prompt(suspect_items: list[str], transcript_excerpt: str) -> str:
+    items = "\n".join(f"- {s}" for s in suspect_items)
+    return (
+        f"可疑条目：\n{items}\n\n"
+        f"相关会议转录片段（每行 [seq] [时间] 说话人: 内容）：\n\n{transcript_excerpt}\n\n"
+        f"请判断哪些可疑条目确属无原文依据的问题。{_JUDGE_SCHEMA_DESC}"
     )

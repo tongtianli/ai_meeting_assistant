@@ -32,6 +32,22 @@ class SummaryContent(BaseModel):
     todos: list[TodoItem] = []
 
 
+class MapFacts(BaseModel):
+    """长会议 map 阶段的精简事实抽取产物（Tech Design M4 §6.2/Phase 4）。
+
+    map 只做事实抽取、不写 title/participants/summary 叙述——省输出 token；
+    正式文风与叙述由 reduce 阶段（glm_air + 范文）统一定型。reduce 消费的是
+    各块 MapFacts（而非完整纪要），最终仍产出 SummaryContent。
+    """
+
+    topics: list[TopicGroup] = []
+    decisions: list[str] = []
+    todos: list[TodoItem] = []
+    risks: list[str] = []
+    open_questions: list[str] = []
+    source_segment_seqs: list[int] = []
+
+
 class SummaryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
