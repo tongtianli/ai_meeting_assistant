@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -83,6 +84,8 @@ class Settings(BaseSettings):
     qa_providers: str = "glm_flash,gemini,glm_air"
     query_rewrite_providers: str = "glm_flash,gemini"
     intent_classify_providers: str = "glm_flash,gemini"
+    # 质量裁判（Phase 4 hybrid）：走免费 Flash，默认不消耗 Air 赠送额度
+    quality_check_providers: str = "glm_flash,gemini"
     # 纪要范例库 few-shot（公司文风第二层）：注入 prompt 的范例数量与总字符预算。
     # 超预算的范例自动跳过；调大可强化文风模仿，代价是每次摘要的 token 消耗
     summary_examples_max_count: int = 3
@@ -90,6 +93,16 @@ class Settings(BaseSettings):
     # 全局术语表注入 ASR 的热词数量上限（对齐 SeedASR/听悟的 100 上限；
     # FunASR 不做数量限制，故在管道侧统一截断，见 pipeline._stage_transcribe）
     glossary_max_terms: int = 100
+    # 长会议 map/reduce 分块（Tech Design M4 §13，Phase 4）：按字符估算 token
+    # 切块（不引入分词依赖），达 target 收口、单行超 max 独占块；相邻块重叠
+    # overlap_segments 行以防跨块 TODO/决策丢失（重复由 reduce 去重兜底）
+    summary_chunk_target_tokens: int = 5000
+    summary_chunk_max_tokens: int = 7000
+    summary_chunk_overlap_segments: int = 2
+    summary_chars_per_token: float = 2.0  # 中文约 2 字符/token 的粗估
+    # 纪要质量检查（Tech Design M4 §12/Phase 4）：
+    # off=紧急回滚跳过；rules=默认，纯确定性启发式；hybrid=规则+条件式 LLM 裁判
+    summary_quality_check_mode: Literal["off", "rules", "hybrid"] = "rules"
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     gemini_model: str = "gemini-3.5-flash"
@@ -126,6 +139,21 @@ class Settings(BaseSettings):
     # 问题命中说话人真名时，额外并入的片段数（说话人感知混合检索，
     # 每位命中的说话人独立取 top-k，多人同问不互相挤占）
     qa_speaker_top_k: int = 6
+
+    @model_validator(mode="after")
+    def _validate_chunking(self) -> "Settings":
+        """分块参数在启动阶段即校验，避免环境变量错误让摘要管线除零/异常分块。"""
+        if self.summary_chars_per_token <= 0:
+            raise ValueError("SUMMARY_CHARS_PER_TOKEN 必须 > 0")
+        if self.summary_chunk_target_tokens <= 0:
+            raise ValueError("SUMMARY_CHUNK_TARGET_TOKENS 必须 > 0")
+        if self.summary_chunk_max_tokens < self.summary_chunk_target_tokens:
+            raise ValueError(
+                "SUMMARY_CHUNK_MAX_TOKENS 必须 >= SUMMARY_CHUNK_TARGET_TOKENS"
+            )
+        if self.summary_chunk_overlap_segments < 0:
+            raise ValueError("SUMMARY_CHUNK_OVERLAP_SEGMENTS 必须 >= 0")
+        return self
 
 
 settings = Settings()

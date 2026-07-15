@@ -50,7 +50,33 @@ class MockLLMProvider(LLMProvider):
         json_mode: bool = True,
         temperature: float = 0.2,
     ) -> LLMResponse:
-        if "意图分类器" in system:  # 意图路由分支（SYSTEM_INTENT 稳定标记）
+        if "事实抽取器" in system:  # 长会议 map 分支（SYSTEM_MAP_EXTRACT 稳定标记）
+            # 从本块 user 里取 [seq]，产出块特异 MapFacts——相邻块 partial 不同，
+            # 可验证 reduce 的合并/去重；todo 溯源到本块内某真实 seq
+            seqs = [int(m) for m in re.findall(r"\[(\d+)\]", user)]
+            facts = {
+                "topics": [
+                    {"title": "本部分要点", "owner": None, "items": ["阶段性事实要点。"]}
+                ],
+                "decisions": [],
+                "todos": [
+                    {
+                        "task": "完成上传接口的开发",
+                        "owner": "speaker_001",
+                        "deadline": "周五",
+                        "source_segment_seq": seqs[0] if seqs else 0,
+                    }
+                ],
+                "risks": [],
+                "open_questions": [],
+                "source_segment_seqs": seqs,
+            }
+            text = json.dumps(facts, ensure_ascii=False)
+        elif "质量审查员" in system:  # 质量裁判分支（SYSTEM_QUALITY_JUDGE 稳定标记）
+            # 确定性：把所有可疑项判为误报（confirmed 空）——hybrid 测试据此
+            # 断言裁判过滤掉规则误报
+            text = json.dumps({"confirmed": []}, ensure_ascii=False)
+        elif "意图分类器" in system:  # 意图路由分支（SYSTEM_INTENT 稳定标记）
             is_edit = any(k in user for k in ("改", "删", "换", "合并", "加上"))
             text = json.dumps({"intent": "edit" if is_edit else "query"})
         elif "纪要编辑器" in system:  # 改纪要分支（SYSTEM_SUMMARY_EDIT 稳定标记）

@@ -13,9 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models import ActionItem, Meeting, Summary, SummaryExample, TranscriptSegment
-from app.schemas.summary import SummaryContent
+from app.schemas.summary import MapFacts, SummaryContent
 from app.services.llm import LLMExhaustedError, LLMTaskType, build_router
 from app.services.llm.prompts import (
+    SYSTEM_MAP_EXTRACT,
     SYSTEM_PLAIN,
     SYSTEM_SUMMARIZER,
     map_prompt,
@@ -24,11 +25,9 @@ from app.services.llm.prompts import (
     single_pass_prompt,
 )
 from app.services.speakers import active_speaker_names
+from app.services.summary_quality import run_quality_check
 
 logger = logging.getLogger(__name__)
-
-# 单块转录的字符预算（中文约 2-4k tokens/块），超出走 map-reduce
-CHUNK_CHAR_BUDGET = 8000
 
 
 def _fmt_ts(seconds: float) -> str:
@@ -46,17 +45,46 @@ def render_transcript_lines(
     ]
 
 
-def chunk_lines(lines: list[str], budget: int = CHUNK_CHAR_BUDGET) -> list[str]:
-    """按字符预算把转录行切块；单行超预算时独占一块，不丢内容。"""
+def _est_tokens(text: str, chars_per_token: float) -> float:
+    return len(text) / chars_per_token
+
+
+def chunk_lines(
+    lines: list[str],
+    *,
+    target_tokens: int | None = None,
+    max_tokens: int | None = None,
+    overlap_segments: int | None = None,
+    chars_per_token: float | None = None,
+) -> list[str]:
+    """按估算 token 把转录行切块（Tech Design M4 §13）。
+
+    - 达 target_tokens 收口；单行超 max_tokens 时独占一块（不切断整行，不丢内容）；
+    - 相邻块重叠 overlap_segments 行以防跨块 TODO/决策丢失——重叠带来的重复由
+      reduce 阶段去重、ActionItem 按 seq 幂等重建兜底。
+    默认从 settings 取，测试可覆盖。
+    """
+    tt = target_tokens or settings.summary_chunk_target_tokens
+    mt = max_tokens or settings.summary_chunk_max_tokens
+    ov = (
+        settings.summary_chunk_overlap_segments
+        if overlap_segments is None
+        else overlap_segments
+    )
+    cpt = chars_per_token or settings.summary_chars_per_token
+
     chunks: list[str] = []
     current: list[str] = []
-    size = 0
+    size = 0.0
     for line in lines:
-        if current and size + len(line) > budget:
+        lt = _est_tokens(line, cpt)
+        if current and (size + lt > tt or lt > mt):
             chunks.append("\n".join(current))
-            current, size = [], 0
+            # 尾部 ov 行带入下一块开头（跨块延续）
+            current = current[-ov:] if ov > 0 else []
+            size = sum(_est_tokens(x, cpt) for x in current)
         current.append(line)
-        size += len(line) + 1
+        size += lt
     if current:
         chunks.append("\n".join(current))
     return chunks
@@ -106,8 +134,9 @@ async def _generate_content(
             map_router = build_router(LLMTaskType.SUMMARY_MAP)
             partials: list[str] = []
             for i, chunk in enumerate(chunks):
+                # map 走精简事实抽取 schema（省 token）；文风由 reduce 定型
                 partial, _ = await map_router.generate_json(
-                    SYSTEM_SUMMARIZER, map_prompt(chunk, i + 1, len(chunks)), SummaryContent
+                    SYSTEM_MAP_EXTRACT, map_prompt(chunk, i + 1, len(chunks)), MapFacts
                 )
                 partials.append(partial.model_dump_json())
             content, resp = await final_router.generate_json(
@@ -139,9 +168,34 @@ async def summarize_meeting(
     lines = render_transcript_lines(segments, names)
     examples = await load_style_examples(session, meeting.user_id)
 
-    content, model_id, degraded = await _generate_content(
-        lines, [e.content for e in examples] or None
-    )
+    example_texts = [e.content for e in examples] or None
+    content, model_id, degraded = await _generate_content(lines, example_texts)
+
+    # 质量诊断（Phase 4）：仅对结构化纪要；高风险自动重跑一次（上限 1）
+    quality_meta: dict = {}
+    if not degraded:
+        transcript_text = "\n".join(lines)
+        seqs = {s.seq for s in segments}
+        report = await run_quality_check(
+            SummaryContent.model_validate(content),
+            transcript_text, seqs, example_texts, meeting=meeting,
+        )
+        if report.has_high_risk:
+            logger.warning(
+                "summary quality high-risk, regenerating once: %s", report.to_meta()
+            )
+            content2, model_id2, degraded2 = await _generate_content(lines, example_texts)
+            if not degraded2:
+                content, model_id, degraded = content2, model_id2, degraded2
+                report = await run_quality_check(
+                    SummaryContent.model_validate(content2),
+                    transcript_text, seqs, example_texts, meeting=meeting,
+                )
+            report.regenerated = True
+        if not report.is_empty:
+            logger.warning("summary quality flags: %s", report.to_meta())
+        quality_meta = report.to_meta()
+
     content["_meta"] = {
         # 版本来源：pipeline（首次自动）| resummarize（用户重跑）| chat（对话修改，
         # 见 summary_edit.py）——版本历史/审计按此区分各版本从何而来
@@ -153,6 +207,8 @@ async def summarize_meeting(
         # 可追溯：本次纪要模仿了哪些范例（文风调优时对照用）
         "style_examples": [{"id": str(e.id), "title": e.title} for e in examples],
     }
+    if quality_meta:
+        content["_meta"]["quality"] = quality_meta
 
     summary = Summary(
         meeting_id=meeting.id,

@@ -17,6 +17,8 @@ class LLMTaskType(str, Enum):
     QA_ANSWER = "qa_answer"
     QUERY_REWRITE = "query_rewrite"
     INTENT_CLASSIFY = "intent_classify"
+    # 质量裁判（Phase 4 hybrid 模式）：轻量校验，flash 优先、默认不碰 Air
+    QUALITY_CHECK = "quality_check"
 
 
 class LLMError(RuntimeError):

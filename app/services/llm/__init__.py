@@ -21,6 +21,7 @@ _TASK_PROVIDER_FIELDS: dict[LLMTaskType, str] = {
     LLMTaskType.QA_ANSWER: "qa_providers",
     LLMTaskType.QUERY_REWRITE: "query_rewrite_providers",
     LLMTaskType.INTENT_CLASSIFY: "intent_classify_providers",
+    LLMTaskType.QUALITY_CHECK: "quality_check_providers",
 }
 
 
