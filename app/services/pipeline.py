@@ -24,6 +24,7 @@ from app.models import (
     VoiceSample,
 )
 from app.services.asr import get_asr_provider
+from app.services.llm.usage import usage_context
 from app.services.speakers import auto_bind_voiceprints
 from app.services.summarize import summarize_meeting
 from app.services.storage import get_audio_storage
@@ -40,9 +41,11 @@ async def run_pipeline(meeting_id: UUID) -> None:
             return
         meeting.error_message = None  # 重试时清掉上次失败的残留文案
         try:
-            wav_path = await _stage_transcode(session, meeting)
-            await _stage_transcribe(session, meeting, wav_path)
-            await _stage_summarize(session, meeting)
+            # 管道内所有 LLM/embedding 调用的用量审计都归属本会议
+            with usage_context(meeting_id=meeting.id, user_id=meeting.user_id):
+                wav_path = await _stage_transcode(session, meeting)
+                await _stage_transcribe(session, meeting, wav_path)
+                await _stage_summarize(session, meeting)
         except Exception as exc:
             logger.exception("pipeline failed for meeting %s", meeting_id)
             await session.rollback()
@@ -67,7 +70,8 @@ async def run_resummarize(meeting_id: UUID) -> None:
             logger.error("resummarize: meeting %s not found", meeting_id)
             return
         try:
-            await _stage_summarize(session, meeting, origin="resummarize")
+            with usage_context(meeting_id=meeting.id, user_id=meeting.user_id):
+                await _stage_summarize(session, meeting, origin="resummarize")
         except Exception as exc:
             logger.exception("resummarize failed for meeting %s", meeting_id)
             await session.rollback()

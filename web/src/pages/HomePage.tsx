@@ -83,6 +83,9 @@ export default function HomePage() {
       <div className="topbar">
         <h1>会议列表</h1>
         <div>
+          <Link to="/llm-usage" style={{ marginRight: 12 }}>
+            模型用量
+          </Link>
           <Link to="/glossary" style={{ marginRight: 12 }}>
             术语表
           </Link>

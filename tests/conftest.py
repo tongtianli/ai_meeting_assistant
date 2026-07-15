@@ -101,6 +101,8 @@ def _reset_test_db():
 
             async with engine.begin() as conn:
                 await conn.execute(text("DELETE FROM users"))
+                # 审计表无外键（记录须在会议/用户删除后存活），需单独清空
+                await conn.execute(text("DELETE FROM llm_usage_records"))
                 await conn.execute(
                     text(
                         "INSERT INTO users (id, name, created_at, updated_at) "

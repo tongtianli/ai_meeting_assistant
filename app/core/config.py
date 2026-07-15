@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     glm_air_model: str = "glm-4.5-air"
     glm_flash_model: str = "glm-4-flash"
 
+    # 资源包信息（Tech Design M4 §12：仅用于应用侧用量预警，控制台余额是最终真值）
+    glm_air_grant_total_tokens: int = 12_000_000
+    glm_general_grant_total_tokens: int = 1_996_701
+    glm_grant_expires_at: str = "2026-10-10T08:40:18+08:00"
+
     # AI 问答 RAG（PRD Feature 5）。embedding 不能像 LLM 那样降级混用
     # （不同模型向量空间不通），故单一 provider、无 fallback。
     embedding_provider: str = "glm"  # glm | gemini | mock（key 缺失时报错不降级）

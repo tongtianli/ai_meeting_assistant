@@ -83,7 +83,7 @@ def build_router(task: LLMTaskType | None = None) -> LLMRouter:
             order,
         )
         providers = _build_providers(settings.llm_providers)
-    return LLMRouter(providers)
+    return LLMRouter(providers, task=task)
 
 
 __all__ = [
