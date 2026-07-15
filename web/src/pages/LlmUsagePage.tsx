@@ -34,7 +34,11 @@ function enforcementBanner(g: GrantStatus): string | null {
     return `额度熔断：${why}，已停止调用 Air（GLM_ALLOW_PAID_AFTER_GRANT=false，禁止静默付费）`;
   }
   if (g.enforcement === "high_value_only") {
-    return "资源包接近耗尽：Air 仅用于高价值任务（纪要生成/编辑），QA 等已切换免费模型";
+    const why =
+      g.expired || g.hard_limit_reached
+        ? "资源包已到期/耗尽，仅高价值任务允许付费续用 Air"
+        : "资源包接近耗尽，Air 仅用于高价值任务（纪要生成/编辑）";
+    return `${why}，QA 等已切换免费模型`;
   }
   if (g.soft_limit_reached) {
     return "资源包接近耗尽（已达软上限）";

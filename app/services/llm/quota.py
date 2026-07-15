@@ -79,17 +79,24 @@ def grant_expired(now: datetime | None = None) -> bool:
 def air_gate(snapshot: QuotaSnapshot, task_type: str) -> tuple[bool, str | None]:
     """glm_air 是否允许用于该任务；不允许时返回 (False, 原因)。
 
-    原因取值：expired（资源包到期）| exhausted（额度耗尽）| soft_limit
-    （接近耗尽，低价值任务让位）——三者在日志/审计/管理端均可区分。
+    原因取值（在日志/审计/管理端均可区分）：
+    - expired（资源包到期）/ exhausted（额度耗尽）：不允许付费时全任务熔断；
+    - paid_high_value_only：到期/耗尽但允许付费——仅高价值任务可付费续用 Air，
+      低价值任务一律让位（即便累计仍低于软上限，也不得静默付费）；
+    - soft_limit：仍在有效期/未耗尽，但已达软上限，低价值任务让位。
     """
+    high_value = task_type in HIGH_VALUE_TASKS
     expired = grant_expired()
     exhausted = snapshot.air_tracked >= settings.glm_air_grant_total_tokens
-    if (expired or exhausted) and not settings.glm_allow_paid_after_grant:
-        return False, "expired" if expired else "exhausted"
-    if (
-        snapshot.air_tracked >= settings.glm_air_soft_limit_tokens
-        and task_type not in HIGH_VALUE_TASKS
-    ):
+    if expired or exhausted:
+        if not settings.glm_allow_paid_after_grant:
+            return False, "expired" if expired else "exhausted"
+        # 允许付费：强制进入 high_value_only——低价值任务不因“用量尚低”
+        # 而继续走到期/耗尽后的付费 Air（否则会造成意外付费）
+        if not high_value:
+            return False, "paid_high_value_only"
+        return True, None
+    if snapshot.air_tracked >= settings.glm_air_soft_limit_tokens and not high_value:
         return False, "soft_limit"
     return True, None
 
@@ -98,16 +105,20 @@ _REASON_TEXT = {
     "expired": "资源包已到期",
     "exhausted": "应用侧累计已达资源包总量",
     "soft_limit": "接近耗尽（软上限），低价值任务让位",
+    "paid_high_value_only": "资源包已到期/耗尽，仅高价值任务允许付费续用",
 }
+
+# 让位类原因（Air 被移除但有免费兜底，非硬熔断）
+_YIELD_REASONS = frozenset({"soft_limit", "paid_high_value_only"})
 
 
 def block_message(reason: str) -> str:
+    if reason in _YIELD_REASONS:
+        return f"glm_air 已让位：{_REASON_TEXT.get(reason, reason)}"
     return (
         f"glm_air 额度熔断：{_REASON_TEXT.get(reason, reason)}"
         "（GLM_ALLOW_PAID_AFTER_GRANT=false 禁止静默付费；"
         "控制台余额是最终真值）"
-        if reason != "soft_limit"
-        else f"glm_air 已让位：{_REASON_TEXT[reason]}"
     )
 
 

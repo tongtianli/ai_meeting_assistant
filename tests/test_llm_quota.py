@@ -125,6 +125,41 @@ def test_hard_limit_with_paid_allowed_keeps_air_for_high_value(monkeypatch) -> N
     assert resp.provider == "glm_flash"
 
 
+def test_expired_paid_allowed_below_soft_limit_blocks_low_value(monkeypatch) -> None:
+    """到期 + 允许付费 + 用量仍低于软上限：低价值任务不得静默付费走 Air。
+
+    回归 review：此前只在累计达软上限时让低价值任务让位，到期后用量
+    尚低会继续付费调用 Air（意外付费）。
+    """
+    monkeypatch.setattr(
+        settings, "glm_grant_expires_at", "2020-01-01T00:00:00+08:00"
+    )
+    monkeypatch.setattr(settings, "glm_allow_paid_after_grant", True)
+    asyncio.run(_seed_air(1000))  # 远低于软上限
+    air, flash = _FakeProvider("glm_air"), _FakeProvider("glm_flash")
+
+    # 低价值任务：即便用量很低，也让位到免费模型
+    _, resp = _ask([air, flash], LLMTaskType.QA_ANSWER)
+    assert resp.provider == "glm_flash"
+    assert air.calls == 0
+    # 高价值任务：允许付费续用 Air
+    _, resp = _ask([air, flash], LLMTaskType.SUMMARY_FINAL)
+    assert resp.provider == "glm_air"
+
+
+def test_exhausted_paid_allowed_blocks_low_value(monkeypatch) -> None:
+    """耗尽 + 允许付费：低价值任务让位（paid_high_value_only），高价值付费续用。"""
+    monkeypatch.setattr(settings, "glm_allow_paid_after_grant", True)
+    asyncio.run(_seed_air(settings.glm_air_grant_total_tokens))
+    air, flash = _FakeProvider("glm_air"), _FakeProvider("glm_flash")
+
+    _, resp = _ask([air, flash], LLMTaskType.INTENT_CLASSIFY)
+    assert resp.provider == "glm_flash"
+    assert air.calls == 0
+    _, resp = _ask([air, flash], LLMTaskType.SUMMARY_EDIT)
+    assert resp.provider == "glm_air"
+
+
 def test_expired_grant_blocks_air(monkeypatch) -> None:
     monkeypatch.setattr(
         settings, "glm_grant_expires_at", "2020-01-01T00:00:00+08:00"
@@ -252,6 +287,20 @@ def test_stats_shows_expired_reason(monkeypatch) -> None:
         assert g["expired"] is True
         assert g["enforcement"] == "blocked"
         assert g["enforcement_reason"] == "expired"
+
+
+def test_stats_expired_paid_shows_high_value_only(monkeypatch) -> None:
+    """到期 + 允许付费 + 用量低于软上限：管理端显示 high_value_only 而非 blocked。"""
+    monkeypatch.setattr(
+        settings, "glm_grant_expires_at", "2020-01-01T00:00:00+08:00"
+    )
+    monkeypatch.setattr(settings, "glm_allow_paid_after_grant", True)
+    asyncio.run(_seed_air(1000))
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        g = _air_grant(client, headers)
+        assert g["expired"] is True and not g["soft_limit_reached"]
+        assert g["enforcement"] == "high_value_only"
 
 
 def test_general_grant_warns_but_never_enforces() -> None:
