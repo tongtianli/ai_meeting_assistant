@@ -323,9 +323,13 @@ async def resolve_citations(
     if not segment_ids:
         return []
     ids = [uuid.UUID(str(sid)) for sid in segment_ids]
+    # 强制会议隔离：引用只在本会议内反查（历史脏数据也不外泄他会原文）
     segs = list(
         await session.scalars(
-            select(TranscriptSegment).where(TranscriptSegment.id.in_(ids))
+            select(TranscriptSegment).where(
+                TranscriptSegment.id.in_(ids),
+                TranscriptSegment.meeting_id == meeting_id,
+            )
         )
     )
     names = await active_speaker_names(session, meeting_id)
@@ -366,25 +370,36 @@ async def _recent_history(
 
 
 async def _last_cited_texts(
-    session: AsyncSession, history: list[ChatMessage]
+    session: AsyncSession, meeting_id: uuid.UUID, history: list[ChatMessage]
 ) -> list[str]:
-    """上一轮 assistant 合法引用的原文（指代改写的事实语境，§4.1.1-B）。"""
-    for msg in reversed(history):
-        if msg.role == "assistant" and msg.cited_segment_ids:
-            ids = [
-                uuid.UUID(str(sid))
-                for sid in msg.cited_segment_ids[
-                    : settings.qa_rewrite_cited_max_segments
-                ]
-            ]
-            segs = list(
-                await session.scalars(
-                    select(TranscriptSegment).where(TranscriptSegment.id.in_(ids))
-                )
+    """上一轮 assistant 合法引用的原文（指代改写的事实语境，§4.1.1-B）。
+
+    - 只看**紧邻本轮**的最后一条 assistant 消息：它无引用（拒答/编辑回执）
+      就返回空，不回退更旧引用——"他/这个方案"不得错绑到更早的话题；
+    - segment 反查强制限定本会议：即便历史数据混入他会 ID，
+      其他会议原文也绝不进入改写 prompt（会议隔离）。
+    """
+    last_assistant = next(
+        (m for m in reversed(history) if m.role == "assistant"), None
+    )
+    if last_assistant is None or not last_assistant.cited_segment_ids:
+        return []
+    ids = [
+        uuid.UUID(str(sid))
+        for sid in last_assistant.cited_segment_ids[
+            : settings.qa_rewrite_cited_max_segments
+        ]
+    ]
+    segs = list(
+        await session.scalars(
+            select(TranscriptSegment).where(
+                TranscriptSegment.id.in_(ids),
+                TranscriptSegment.meeting_id == meeting_id,
             )
-            by_id = {s.id: s for s in segs}
-            return [by_id[i].text for i in ids if i in by_id]
-    return []
+        )
+    )
+    by_id = {s.id: s for s in segs}
+    return [by_id[i].text for i in ids if i in by_id]
 
 
 async def handle_chat(
@@ -404,7 +419,9 @@ async def handle_chat(
     recent_user = [m.content for m in history if m.role == "user"]
     # 指代门控：命中才做上一轮引用原文的额外查询
     cited_texts = (
-        await _last_cited_texts(session, history) if has_anaphora(question) else []
+        await _last_cited_texts(session, meeting.id, history)
+        if has_anaphora(question)
+        else []
     )
 
     started = time.monotonic()

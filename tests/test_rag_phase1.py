@@ -480,6 +480,131 @@ def test_same_model_same_dim_no_reembed(tmp_path, monkeypatch) -> None:
     assert embed_batches == [1]  # 仅问题向量；未触发整场重嵌（7 段会是一批 7）
 
 
+# ---------- 引用边界：会议隔离与不回退旧引用（review 修复）----------
+
+
+def test_last_cited_texts_scoped_to_meeting(tmp_path, monkeypatch) -> None:
+    """他会的 cited_segment_ids（脏数据/误写）不得把他会原文带进改写 prompt。"""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        mid_a = _done_meeting(client, headers, title="会议A")
+        mid_b = _done_meeting(client, headers, title="会议B")
+
+    async def _run() -> list[str]:
+        from app.models import ChatMessage
+        from app.services.qa import _last_cited_texts
+
+        async with SessionLocal() as session:
+            seg_b = await session.scalar(
+                select(TranscriptSegment).where(
+                    TranscriptSegment.meeting_id == uuid.UUID(mid_b)
+                )
+            )
+            # 历史里的 assistant 消息引用了会议 B 的 segment，但当前在会议 A
+            history = [
+                ChatMessage(
+                    meeting_id=uuid.UUID(mid_a),
+                    role="assistant",
+                    content="x",
+                    cited_segment_ids=[str(seg_b.id)],
+                )
+            ]
+            return await _last_cited_texts(session, uuid.UUID(mid_a), history)
+
+    assert asyncio.run(_run()) == []
+
+
+def test_last_cited_texts_no_fallback_to_older_citations(tmp_path, monkeypatch) -> None:
+    """最近一条 assistant 无引用（拒答/编辑回执）→ 返回空，不回退更旧引用。"""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        mid = _done_meeting(client, headers)
+
+    async def _run() -> list[str]:
+        from app.models import ChatMessage
+        from app.services.qa import _last_cited_texts
+
+        async with SessionLocal() as session:
+            seg = await session.scalar(
+                select(TranscriptSegment).where(
+                    TranscriptSegment.meeting_id == uuid.UUID(mid)
+                )
+            )
+            history = [
+                ChatMessage(  # 更旧的一轮：有引用
+                    meeting_id=uuid.UUID(mid),
+                    role="assistant",
+                    content="旧回答",
+                    cited_segment_ids=[str(seg.id)],
+                ),
+                ChatMessage(
+                    meeting_id=uuid.UUID(mid), role="user", content="新问题"
+                ),
+                ChatMessage(  # 紧邻本轮：无引用（拒答）
+                    meeting_id=uuid.UUID(mid),
+                    role="assistant",
+                    content="会议原文中没有找到明确结论。",
+                    cited_segment_ids=None,
+                ),
+            ]
+            return await _last_cited_texts(session, uuid.UUID(mid), history)
+
+    assert asyncio.run(_run()) == []  # "他"不得绑定到更早话题
+
+
+def test_resolve_citations_scoped_to_meeting(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        mid_a = _done_meeting(client, headers, title="会A")
+        mid_b = _done_meeting(client, headers, title="会B")
+
+    async def _run() -> list:
+        from app.services.qa import resolve_citations
+
+        async with SessionLocal() as session:
+            seg_b = await session.scalar(
+                select(TranscriptSegment).where(
+                    TranscriptSegment.meeting_id == uuid.UUID(mid_b)
+                )
+            )
+            return await resolve_citations(session, uuid.UUID(mid_a), [str(seg_b.id)])
+
+    assert asyncio.run(_run()) == []  # 他会 segment 不反查为本会引用
+
+
+# ---------- 配置启动校验（review 修复）----------
+
+
+def test_qa_retrieval_config_validation() -> None:
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(qa_max_context_segments=0)
+    with pytest.raises(ValidationError):
+        Settings(qa_rewrite_recent_messages=-1)
+    with pytest.raises(ValidationError):
+        Settings(qa_min_speaker_anchors_per_person=-1)
+    with pytest.raises(ValidationError):
+        # 保底数 > 每人召回数：配置名承诺的保底无法满足
+        Settings(
+            qa_min_speaker_anchors_per_person=5, qa_speaker_top_k_per_person=2
+        )
+    with pytest.raises(ValidationError):
+        # 满员点名时保底总量超过 context 预算
+        Settings(
+            qa_max_speaker_persons=30,
+            qa_min_speaker_anchors_per_person=1,
+            qa_max_context_segments=24,
+        )
+    # 合法组合可通过
+    Settings(qa_max_speaker_persons=4, qa_min_speaker_anchors_per_person=1)
+
+
 # ---------- 检索日志默认脱敏（§4.1.1-H）----------
 
 

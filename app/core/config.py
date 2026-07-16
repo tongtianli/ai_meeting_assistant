@@ -175,5 +175,43 @@ class Settings(BaseSettings):
             raise ValueError("SUMMARY_CHUNK_OVERLAP_SEGMENTS 必须 >= 0")
         return self
 
+    @model_validator(mode="after")
+    def _validate_qa_retrieval(self) -> "Settings":
+        """RAG 检索参数启动校验（Phase 1 §4.1.1）：错误配置直接拒绝启动，
+        不让"每人保底"与上下文预算语义被静默破坏。"""
+        non_negative = {
+            "QA_TOP_K": self.qa_top_k,
+            "QA_SPEAKER_TOP_K": self.qa_speaker_top_k,
+            "QA_MAX_SPEAKER_PERSONS": self.qa_max_speaker_persons,
+            "QA_MIN_SPEAKER_ANCHORS_PER_PERSON": self.qa_min_speaker_anchors_per_person,
+            "QA_NEIGHBOR_WINDOW": self.qa_neighbor_window,
+            "QA_REWRITE_RECENT_MESSAGES": self.qa_rewrite_recent_messages,
+            "QA_REWRITE_CITED_MAX_SEGMENTS": self.qa_rewrite_cited_max_segments,
+            "QA_REWRITE_CITED_MAX_CHARS": self.qa_rewrite_cited_max_chars,
+        }
+        if self.qa_speaker_top_k_per_person is not None:
+            non_negative["QA_SPEAKER_TOP_K_PER_PERSON"] = (
+                self.qa_speaker_top_k_per_person
+            )
+        for name, value in non_negative.items():
+            if value < 0:
+                raise ValueError(f"{name} 必须 >= 0")
+        if self.qa_max_context_segments <= 0:
+            raise ValueError("QA_MAX_CONTEXT_SEGMENTS 必须 > 0")
+        if self.qa_min_speaker_anchors_per_person > self.qa_per_person_k:
+            raise ValueError(
+                "QA_MIN_SPEAKER_ANCHORS_PER_PERSON 不得大于每人召回数 "
+                "QA_SPEAKER_TOP_K_PER_PERSON（否则保底数无法满足）"
+            )
+        if (
+            self.qa_max_speaker_persons * self.qa_min_speaker_anchors_per_person
+            > self.qa_max_context_segments
+        ):
+            raise ValueError(
+                "QA_MAX_SPEAKER_PERSONS × QA_MIN_SPEAKER_ANCHORS_PER_PERSON "
+                "不得超过 QA_MAX_CONTEXT_SEGMENTS（否则满员点名时无法保证每人保底）"
+            )
+        return self
+
 
 settings = Settings()
