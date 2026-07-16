@@ -21,8 +21,8 @@ from app.services.qa import (
     budget_context,
     ensure_embeddings,
     match_speakers_union,
-    merge_anchors,
 )
+from app.services.retrieval import fuse_anchors
 from app.services.query_intent import classify_and_rewrite, has_anaphora
 from tests.conftest import auth_headers, requires_db
 
@@ -102,24 +102,29 @@ def test_budget_first_ring_before_second_ring() -> None:
 # ---------- 保底 speaker anchor（§4.1.1-E）----------
 
 
-def test_merge_anchors_protected_speaker_first() -> None:
+def test_fuse_anchors_protected_speaker_first() -> None:
     p1, p2 = uuid.uuid4(), uuid.uuid4()
     v = _segs(1, 2, 3)
     s1, s2 = _segs(11, 12), _segs(21, 22)
-    ordered = merge_anchors(
-        v, {p1: s1, p2: s2}, person_order=[p1, p2], min_protected_per_person=1
+    ordered, _ = fuse_anchors(
+        v, {p1: s1, p2: s2}, [p1, p2], 1, keyword_by_token={}, token_order=[], rrf_k=60
     )
-    # 受保护（每人第 1 条）最先，其后 vector，最后剩余 speaker
-    assert [s.seq for s in ordered] == [11, 21, 1, 2, 3, 12, 22]
+    # 受保护（每人第 1 条）钉在最前；其余全部保留、无重复
+    assert [s.seq for s in ordered[:2]] == [11, 21]
+    assert {s.seq for s in ordered} == {1, 2, 3, 11, 12, 21, 22}
+    assert len(ordered) == 7
 
 
-def test_merge_anchors_dedupes_across_sources() -> None:
+def test_fuse_anchors_dedupes_across_sources() -> None:
     p1 = uuid.uuid4()
     shared = _Seg(seq=5)
-    ordered = merge_anchors(
-        [shared, _Seg(seq=6)], {p1: [shared]}, [p1], min_protected_per_person=1
+    ordered, candidates = fuse_anchors(
+        [shared, _Seg(seq=6)], {p1: [shared]}, [p1], 1, {}, [], 60
     )
     assert [s.seq for s in ordered] == [5, 6]  # 同 segment 只保留一次（受保护位）
+    # 融合候选记录了双来源（§5.4 可观测）
+    both = next(c for c in candidates if c.segment.seq == 5)
+    assert both.sources == {"vector", "speaker"}
 
 
 def test_named_person_anchor_survives_vector_flood() -> None:
@@ -128,9 +133,9 @@ def test_named_person_anchor_survives_vector_flood() -> None:
     vector = _segs(*range(0, 10))
     speaker = _segs(99)
     universe = vector + speaker
-    ordered = merge_anchors(vector, {p1: speaker}, [p1], 1)
+    ordered, _ = fuse_anchors(vector, {p1: speaker}, [p1], 1, {}, [], 60)
     ctx, _ = budget_context(ordered, _by_seq(universe), window=0, max_segments=5)
-    assert 99 in {s.seq for s in ctx}  # 保底在 rank 首位，预算再紧也在
+    assert 99 in {s.seq for s in ctx}  # 保底钉 rank 首位，预算再紧也在
 
 
 # ---------- 说话人并集与臆造防护（§4.1.1-C）----------

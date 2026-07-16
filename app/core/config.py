@@ -151,6 +151,11 @@ class Settings(BaseSettings):
     qa_rewrite_cited_max_segments: int = 3  # 指代改写附带的上轮引用原文数上限
     qa_rewrite_cited_max_chars: int = 1200  # 附带引用原文的字符预算
     qa_retrieval_debug_text: bool = False  # true 才在检索日志记录问题明文
+    # ---- RAG Phase 2：关键词召回 + RRF 融合（§5，评审 §8 约束）----
+    qa_keyword_max_tokens: int = 8  # 每次查询最多提取的精确 token 数
+    qa_keyword_top_k_per_token: int = 4  # 每个 token 独立候选限额（防高频词占满）
+    qa_keyword_min_token_len: int = 3  # 普通英文 token 最短长度（版本/编号/金额/日期豁免）
+    qa_rrf_k: int = 60  # RRF 常数；初始值非验证最优，真实评估建议对比 10/30/60
 
     @property
     def qa_per_person_k(self) -> int:
@@ -211,6 +216,15 @@ class Settings(BaseSettings):
                 "QA_MAX_SPEAKER_PERSONS × QA_MIN_SPEAKER_ANCHORS_PER_PERSON "
                 "不得超过 QA_MAX_CONTEXT_SEGMENTS（否则满员点名时无法保证每人保底）"
             )
+        for name, value in {
+            "QA_KEYWORD_MAX_TOKENS": self.qa_keyword_max_tokens,
+            "QA_KEYWORD_TOP_K_PER_TOKEN": self.qa_keyword_top_k_per_token,
+            "QA_KEYWORD_MIN_TOKEN_LEN": self.qa_keyword_min_token_len,
+        }.items():
+            if value < 0:
+                raise ValueError(f"{name} 必须 >= 0")
+        if self.qa_rrf_k <= 0:
+            raise ValueError("QA_RRF_K 必须 > 0")
         return self
 
 
