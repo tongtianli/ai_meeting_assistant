@@ -17,7 +17,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 
-from sqlalchemy import or_, select
+from sqlalchemy import nullslast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -26,11 +26,12 @@ from app.models import TranscriptSegment
 logger = logging.getLogger(__name__)
 
 # 精确实体模式（评审 §8.1：版本/编号/金额/日期豁免最短长度；金额须带单位）。
-# version 须带 v 前缀或 ≥2 个点——否则 "29.5" 这类裸小数会被当版本号提走，
-# 违背"不提裸数字"的约束
+# version：带 v 前缀（v2 / v2.1.4 均可）或无前缀但 ≥2 个点（2.1.4）——
+# "29.5" 这类裸小数不得被当版本号提走（"不提裸数字"约束）。
+# code 大小写不敏感：用户输入 api-203 也应触发精确召回（ILIKE 本就不区分大小写）
 _ENTITY_PATTERNS: list[tuple[str, re.Pattern]] = [
-    ("version", re.compile(r"\bv\d+(?:\.\d+)+\b|\b\d+(?:\.\d+){2,}\b", re.IGNORECASE)),
-    ("code", re.compile(r"\b[A-Z]{2,10}-?\d+\b")),
+    ("version", re.compile(r"\bv\d+(?:\.\d+)*\b|\b\d+(?:\.\d+){2,}\b", re.IGNORECASE)),
+    ("code", re.compile(r"\b[A-Za-z]{2,10}-?\d+\b")),
     ("amount", re.compile(r"\d+(?:\.\d+)?\s*(?:万|亿|元|块|美元|USD|RMB)")),
     ("date", re.compile(r"\d{1,2}\s*[月/-]\s*\d{1,2}")),
     ("file", re.compile(r"\b[\w-]+\.(?:docx?|xlsx?|pptx?|pdf|txt|md|csv|json|yaml|yml)\b", re.IGNORECASE)),
@@ -40,41 +41,35 @@ _EN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 
 
 def extract_keywords(query: str) -> list[str]:
-    """从 standalone_query 提取精确 token，按出现序去重、总量封顶。
+    """从 standalone_query 提取精确 token：**全局按出现位置排序**、去重、封顶。
 
-    实体模式命中的区间不再重复提取英文子串（如 "API-203" 不再吐出 "API"）。
+    实体候选与英文候选统一收集后按 (start, 最长优先) 排序——封顶截断时
+    保留文本中更早出现的 token（评审修复：不再实体全部先于英文）；
+    重叠区间只取一次（"API-203" 不再吐出 "API"，"29.5 万" 优先于 "29.5"）。
     """
     max_tokens = settings.qa_keyword_max_tokens
     if max_tokens <= 0:
         return []
+    candidates: list[tuple[int, int, str]] = []
+    for _, pattern in _ENTITY_PATTERNS:
+        for m in pattern.finditer(query):
+            candidates.append((m.start(), m.end(), m.group(0)))
+    for m in _EN_RE.finditer(query):
+        if len(m.group(0)) >= settings.qa_keyword_min_token_len:
+            candidates.append((m.start(), m.end(), m.group(0)))
+
     tokens: list[str] = []
     seen: set[str] = set()
     spans: list[tuple[int, int]] = []
-
-    def _take(tok: str, start: int, end: int) -> None:
+    # 全局出现序；同起点取最长（实体天然长于其英文子串，故实体优先成立）
+    for start, end, tok in sorted(candidates, key=lambda c: (c[0], -c[1])):
+        if any(s < end and start < e for s, e in spans):  # 与已取区间重叠
+            continue
         key = tok.strip().lower()
         if key and key not in seen:
             seen.add(key)
             tokens.append(tok.strip())
             spans.append((start, end))
-
-    hits: list[tuple[int, int, str]] = []
-    for _, pattern in _ENTITY_PATTERNS:
-        for m in pattern.finditer(query):
-            hits.append((m.start(), m.end(), m.group(0)))
-    # 同起点取最长匹配（"29.5 万" 优先于 "29.5"），重叠区间不重复提取
-    for start, end, tok in sorted(hits, key=lambda h: (h[0], -h[1])):
-        if any(s < end and start < e for s, e in spans):  # 与已取区间重叠
-            continue
-        _take(tok, start, end)
-
-    for m in _EN_RE.finditer(query):
-        if len(m.group(0)) < settings.qa_keyword_min_token_len:
-            continue
-        if any(s < m.end() and m.start() < e for s, e in spans):
-            continue
-        _take(m.group(0), m.start(), m.end())
-
     return tokens[:max_tokens]
 
 
@@ -95,8 +90,14 @@ async def retrieve_keyword_anchors(
     meeting_id: uuid.UUID,
     tokens: list[str],
     per_token_k: int,
+    qvec: list[float] | None = None,
 ) -> dict[str, list[TranscriptSegment]]:
-    """每个 token 独立 ILIKE 召回（转义 + 绑定参数 + meeting 过滤 + 独立限额）。"""
+    """每个 token 独立 ILIKE 召回（转义 + 绑定参数 + meeting 过滤 + 独立限额）。
+
+    限额内排序（评审修复）：给定 qvec 时按与问题的 embedding 余弦距离取
+    最相关的 K 条——同一实体反复出现时不再"取最早几次"而漏掉真正回答
+    问题的后段发言；无 qvec（如离线工具/测试）退回按 seq。
+    """
     out: dict[str, list[TranscriptSegment]] = {}
     if per_token_k <= 0:
         return out
@@ -105,12 +106,18 @@ async def retrieve_keyword_anchors(
             TranscriptSegment.text.ilike(f"%{_escape_like(v)}%", escape="\\")
             for v in _token_variants(token)
         ]
-        rows = await session.scalars(
-            select(TranscriptSegment)
-            .where(TranscriptSegment.meeting_id == meeting_id, or_(*conds))
-            .order_by(TranscriptSegment.seq)
-            .limit(per_token_k)
+        stmt = select(TranscriptSegment).where(
+            TranscriptSegment.meeting_id == meeting_id, or_(*conds)
         )
+        if qvec is not None:
+            # 空向量段排最后（热路径中 ensure_embeddings 已保证全量嵌入）
+            stmt = stmt.order_by(
+                nullslast(TranscriptSegment.embedding.cosine_distance(qvec)),
+                TranscriptSegment.seq,
+            )
+        else:
+            stmt = stmt.order_by(TranscriptSegment.seq)
+        rows = await session.scalars(stmt.limit(per_token_k))
         out[token] = list(rows)
     return out
 

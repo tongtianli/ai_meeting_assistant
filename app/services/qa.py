@@ -487,7 +487,7 @@ async def _answer_question(
     # 关键词/精确实体召回（§5.2）：从改写后问题提取精确 token
     tokens = extract_keywords(intent_res.standalone_query)
     keyword_by_token = await retrieve_keyword_anchors(
-        session, meeting.id, tokens, settings.qa_keyword_top_k_per_token
+        session, meeting.id, tokens, settings.qa_keyword_top_k_per_token, qvec=qvec
     )
     # 三路 RRF 融合（§5.3）；受保护 speaker anchor 仍钉前（§4.1.1-E）
     anchors, candidates = fuse_anchors(

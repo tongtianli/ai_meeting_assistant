@@ -59,6 +59,23 @@ def test_extract_caps_and_dedupes(monkeypatch) -> None:
     assert extract_keywords(q) == []
 
 
+def test_extract_global_occurrence_order(monkeypatch) -> None:
+    """封顶截断按全局出现序：更早出现的英文词不被靠后的实体挤掉（review 修复）。"""
+    q = "OAuth 的问题需要对照 API-203，最终升级到 v2.1.4"
+    assert extract_keywords(q) == ["OAuth", "API-203", "v2.1.4"]
+    monkeypatch.setattr(settings, "qa_keyword_max_tokens", 1)
+    assert extract_keywords(q) == ["OAuth"]  # max=1 时保留最早的 token
+
+
+def test_extract_lowercase_code_and_v_prefix_version() -> None:
+    """编号大小写不敏感（api-203 也触发精确召回）；v 前缀单段版本 v2 可提取。"""
+    tokens = extract_keywords("api-203 的问题在 v2 就有了")
+    assert "api-203" in tokens
+    assert "v2" in tokens
+    # 裸小数仍不提取
+    assert extract_keywords("涨了 29.5 个点") == []
+
+
 def test_escape_like_literals() -> None:
     assert _escape_like("100%") == "100\\%"
     assert _escape_like("a_b") == "a\\_b"
@@ -128,6 +145,44 @@ def test_keyword_recall_per_token_limit_and_meeting_scope() -> None:
     mids, n, mid_a, _ = asyncio.run(_run())
     assert n == 2  # 每 token 独立限额
     assert all(m == mid_a for m in mids)  # 恒带 meeting_id 过滤
+
+
+def test_keyword_recall_ranks_by_relevance_not_seq() -> None:
+    """同一实体多次出现时，按与问题的向量相关性取 K 条——答案在后段
+    不再被"最早 K 次出现"挤掉（review 修复）。"""
+
+    async def _run():
+        from app.services.embeddings.mock import MockEmbedder
+
+        texts = [
+            "API-203 背景介绍 第一次讨论",   # seq 0
+            "API-203 背景介绍 第二次讨论",   # seq 1
+            "API-203 背景介绍 第三次讨论",   # seq 2
+            "API-203 上线时间 定于下周三",   # seq 3 ← 真正回答问题的后段发言
+        ]
+        mid = await _seed_meeting(texts)
+        embedder = MockEmbedder()
+        async with SessionLocal() as session:
+            segs = list(
+                await session.scalars(
+                    select(TranscriptSegment)
+                    .where(TranscriptSegment.meeting_id == mid)
+                    .order_by(TranscriptSegment.seq)
+                )
+            )
+            vecs = await embedder.embed([s.text for s in segs])
+            for s, v in zip(segs, vecs):
+                s.embedding = v
+            await session.commit()
+            qvec = (await embedder.embed(["API-203 上线时间 是什么时候"]))[0]
+            hits = await retrieve_keyword_anchors(
+                session, mid, ["API-203"], per_token_k=2, qvec=qvec
+            )
+            return [s.seq for s in hits["API-203"]]
+
+    seqs = asyncio.run(_run())
+    assert 3 in seqs  # 相关性排序：后段的"上线时间"发言进入限额
+    assert len(seqs) == 2
 
 
 # ---------- RRF 融合（§5.3 / 评审 §8.3）----------
