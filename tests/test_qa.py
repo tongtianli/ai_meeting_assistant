@@ -176,8 +176,8 @@ def test_speaker_boost_merges_and_dedupes(tmp_path, monkeypatch) -> None:
 def test_speaker_boost_balanced_across_persons(tmp_path, monkeypatch) -> None:
     """多人同问时每位说话人独立取 top-k，配额不被单人挤占。
 
-    绑定两位说话人后直接调 _retrieve：qa_speaker_top_k=2 时应各召回 2 条，
-    统一 limit 的实现可能 4 条全来自其中一位。
+    绑定两位说话人后直接调 retrieve_speaker_anchors：每人 K=2 时应各召回
+    2 条，统一 limit 的实现可能 4 条全来自其中一位。
     """
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     monkeypatch.setattr(settings, "qa_speaker_top_k", 2)
@@ -201,7 +201,7 @@ def test_speaker_boost_balanced_across_persons(tmp_path, monkeypatch) -> None:
 
     async def _run():
         from app.services.embeddings import get_embedder
-        from app.services.qa import _retrieve, match_speaker_person_ids
+        from app.services.qa import match_speaker_person_ids, retrieve_speaker_anchors
         from app.services.speakers import active_speaker_names
 
         question = "张三和李四分别说了什么"
@@ -210,9 +210,10 @@ def test_speaker_boost_balanced_across_persons(tmp_path, monkeypatch) -> None:
             pids = match_speaker_person_ids(names, question)
             assert len(pids) == 2
             qvec = (await get_embedder().embed([question]))[0]
-            return await _retrieve(
-                session, uuid.UUID(mid), qvec, k=0, person_ids=pids
+            by_person = await retrieve_speaker_anchors(
+                session, uuid.UUID(mid), qvec, pids, settings.qa_per_person_k
             )
+            return [seg for segs in by_person.values() for seg in segs]
 
     rows = asyncio.run(_run())
     by_label: dict[str, int] = {}

@@ -6,16 +6,29 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class QaAnswer(BaseModel):
-    """LLM 回答的结构化输出（经 schema 校验，PRD Feature 5）。"""
+    """LLM 回答的结构化输出（经 schema 校验，PRD Feature 5）。
+
+    insufficient_evidence（RAG 设计 §4.1.1-F）：证据不足时显式拒答；
+    程序侧规则——事实性回答（false）必须带 ≥1 条本轮 context 内的合法引用。
+    """
 
     answer: str
     cited_segment_seqs: list[int] = []
+    insufficient_evidence: bool = False
 
 
-class IntentOut(BaseModel):
-    """聊天意图路由（PRD §7.1）：查询 or 修改纪要。"""
+class ChatIntent(BaseModel):
+    """聊天意图 + 多轮独立检索问题（一次 LLM 调用同时产出，§4.1.1-A）。
+
+    standalone_query 缺省为 None：无历史/模型未改写时回退原问题。
+    """
 
     intent: Literal["query", "edit"]
+    standalone_query: str | None = None
+
+
+# 兼容旧名（intent-only 场景仍可用）
+IntentOut = ChatIntent
 
 
 class AskIn(BaseModel):

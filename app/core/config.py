@@ -135,10 +135,30 @@ class Settings(BaseSettings):
     glm_embedding_model: str = "embedding-3"
     gemini_embedding_model: str = "text-embedding-004"
     embedding_batch_size: int = 32
-    qa_top_k: int = 6  # 每次提问检索的 segment 数
+    qa_top_k: int = 6  # 向量召回 anchor 数
     # 问题命中说话人真名时，额外并入的片段数（说话人感知混合检索，
-    # 每位命中的说话人独立取 top-k，多人同问不互相挤占）
+    # 每位命中的说话人独立取 top-k，多人同问不互相挤占）。
+    # 已由 qa_speaker_top_k_per_person 取代（语义相同、名字更明确），
+    # 本名保留一版做兼容 fallback
     qa_speaker_top_k: int = 6
+    # ---- RAG Phase 1（TECH_DESIGN_MEETING_RAG_V1 §4.1.1）----
+    qa_speaker_top_k_per_person: int | None = None  # None → 沿用 qa_speaker_top_k
+    qa_max_speaker_persons: int = 4  # 匹配说话人数上限，超出按首次出现序截断
+    qa_min_speaker_anchors_per_person: int = 1  # 每个命中 person 的保底 speaker anchor
+    qa_neighbor_window: int = 2  # anchor 邻居 ± 窗口
+    qa_max_context_segments: int = 24  # 最终 context 上限（anchor 优先预算）
+    qa_rewrite_recent_messages: int = 6  # 改写输入的最近用户消息条数
+    qa_rewrite_cited_max_segments: int = 3  # 指代改写附带的上轮引用原文数上限
+    qa_rewrite_cited_max_chars: int = 1200  # 附带引用原文的字符预算
+    qa_retrieval_debug_text: bool = False  # true 才在检索日志记录问题明文
+
+    @property
+    def qa_per_person_k(self) -> int:
+        return (
+            self.qa_speaker_top_k_per_person
+            if self.qa_speaker_top_k_per_person is not None
+            else self.qa_speaker_top_k
+        )
 
     @model_validator(mode="after")
     def _validate_chunking(self) -> "Settings":
@@ -153,6 +173,44 @@ class Settings(BaseSettings):
             )
         if self.summary_chunk_overlap_segments < 0:
             raise ValueError("SUMMARY_CHUNK_OVERLAP_SEGMENTS 必须 >= 0")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_qa_retrieval(self) -> "Settings":
+        """RAG 检索参数启动校验（Phase 1 §4.1.1）：错误配置直接拒绝启动，
+        不让"每人保底"与上下文预算语义被静默破坏。"""
+        non_negative = {
+            "QA_TOP_K": self.qa_top_k,
+            "QA_SPEAKER_TOP_K": self.qa_speaker_top_k,
+            "QA_MAX_SPEAKER_PERSONS": self.qa_max_speaker_persons,
+            "QA_MIN_SPEAKER_ANCHORS_PER_PERSON": self.qa_min_speaker_anchors_per_person,
+            "QA_NEIGHBOR_WINDOW": self.qa_neighbor_window,
+            "QA_REWRITE_RECENT_MESSAGES": self.qa_rewrite_recent_messages,
+            "QA_REWRITE_CITED_MAX_SEGMENTS": self.qa_rewrite_cited_max_segments,
+            "QA_REWRITE_CITED_MAX_CHARS": self.qa_rewrite_cited_max_chars,
+        }
+        if self.qa_speaker_top_k_per_person is not None:
+            non_negative["QA_SPEAKER_TOP_K_PER_PERSON"] = (
+                self.qa_speaker_top_k_per_person
+            )
+        for name, value in non_negative.items():
+            if value < 0:
+                raise ValueError(f"{name} 必须 >= 0")
+        if self.qa_max_context_segments <= 0:
+            raise ValueError("QA_MAX_CONTEXT_SEGMENTS 必须 > 0")
+        if self.qa_min_speaker_anchors_per_person > self.qa_per_person_k:
+            raise ValueError(
+                "QA_MIN_SPEAKER_ANCHORS_PER_PERSON 不得大于每人召回数 "
+                "QA_SPEAKER_TOP_K_PER_PERSON（否则保底数无法满足）"
+            )
+        if (
+            self.qa_max_speaker_persons * self.qa_min_speaker_anchors_per_person
+            > self.qa_max_context_segments
+        ):
+            raise ValueError(
+                "QA_MAX_SPEAKER_PERSONS × QA_MIN_SPEAKER_ANCHORS_PER_PERSON "
+                "不得超过 QA_MAX_CONTEXT_SEGMENTS（否则满员点名时无法保证每人保底）"
+            )
         return self
 
 
