@@ -144,6 +144,23 @@ async def _resolve_expected(
     """
     expected = list(dict.fromkeys(item.expected_seqs))
     notes: list[str] = []
+    # 手工数据集常见错误：seq 手滑或大模型编造——校验存在性，无效 seq
+    # 显式剔除并报告，不让它静默压低召回指标
+    if expected:
+        rows = await session.scalars(
+            select(TranscriptSegment.seq).where(
+                TranscriptSegment.meeting_id == item.meeting_id,
+                TranscriptSegment.seq.in_(expected),
+            )
+        )
+        valid = set(rows)
+        unknown = [s for s in expected if s not in valid]
+        if unknown:
+            notes.append(
+                f"{item.meeting_id}「{item.question[:20]}」: "
+                f"expected_segment_seqs 含 {len(unknown)} 个不存在的 seq {unknown}"
+            )
+            expected = [s for s in expected if s in valid]
     ids = getattr(item, "_expected_ids", None)
     if ids:
         rows = list(

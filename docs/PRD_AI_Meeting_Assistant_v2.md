@@ -8,6 +8,12 @@
 > 4. 明确技术选型（Python 全栈、云 ASR API 优先、pgvector）
 > 5. 新增非功能需求：状态机、重试、鉴权、上传、合规、成本
 > 6. 标注 MVP 边界，防止提前实现二期功能
+>
+> **实施状态更新（2026-07-16）**：MVP 与二期 AI 聊天（含改纪要）均已上线；
+> LLM 路由/用量/熔断与问答检索的实现细节以两份技术设计为准——
+> `docs/TECH_DESIGN_LOCAL_LLM_ROUTING_M4.md`（四阶段已全部实现）、
+> `docs/TECH_DESIGN_MEETING_RAG_V1.md`（三阶段已全部实现）。
+> 本文各节以「现状」标注与规划的差异。
 
 ---
 
@@ -62,6 +68,9 @@ Word 导出（用户点击时由程序用模板实时渲染，不占管道）
 
 支持上传格式：mp3 / wav / m4a / mp4（转码阶段归一化，未来小程序 aac 等格式仅需扩展转码入口）
 
+> 现状：上传为**服务端直传本地存储**（`local://` 抽象），预签名 URL 直传对象存储
+> 仍为二期项（接入对象存储时替换上传入口，管道不变）；其余管道与状态机均按本节实现。
+
 ---
 
 ## 3. 核心功能需求
@@ -75,6 +84,10 @@ Word 导出（用户点击时由程序用模板实时渲染，不占管道）
 - MVP 推荐直接使用云 ASR API（自带说话人分离）或 WhisperX（转写+对齐+diarization 一体）
 - ASR 引擎必须抽象为可替换的 provider 接口（云 API ↔ 自建模型可切换）
 - 支持热词/术语表注入机制（应对专业术语识别）
+
+> 现状：provider 已有四个实现——SeedASR 2.0（火山，含云端声纹）、通义听悟、
+> 本地 FunASR（paraformer / Fun-ASR-Nano）、mock；全局术语表已实现并作为
+> 热词注入所有 provider（含转码前处理滤镜链优化远场音质）。
 
 **segment 数据结构：**
 ```json
@@ -124,6 +137,10 @@ Word 导出（用户点击时由程序用模板实时渲染，不占管道）
 
 **溯源要求：** LLM 引用 segment 编号而非自由复述原文，程序反查真实文本与时间戳，杜绝幻觉引用。
 
+> 现状：已按 M4 设计 Phase 4 优化——长会议 map 阶段用精简事实抽取 schema
+> （MapFacts，省 token）、reduce 阶段注入范文定型并去重；产出附带确定性
+> 质量诊断（`_meta.quality`：范文污染 / 无效引用 / 未溯源数字，高风险自动重跑一次）。
+
 ### Feature 4：会议纪要风格统一
 
 根据历史会议纪要学习固定写作风格（标题格式、语言习惯、TODO 格式、术语，如统一「推进 XX 事项」）。
@@ -131,6 +148,10 @@ Word 导出（用户点击时由程序用模板实时渲染，不占管道）
 - 第一阶段：Few-shot Prompt（历史纪要样本注入）
 - 第二阶段：RAG（历史纪要 → embedding → pgvector 检索 → 生成参考）
 - Summary 记录 style_profile_id，风格配置可追溯
+
+> 现状：第一阶段已实现——纪要范例库（summary_examples，可启用/停用、条数与
+> 字符双预算）few-shot 注入最终产出阶段；`_meta.style_examples` 记录本次模仿
+> 了哪些范例（追溯用）；配套范文污染检查防止范例事实泄漏进纪要。第二阶段待建。
 
 ### Feature 5：AI 会议问答（二期）
 
@@ -141,14 +162,19 @@ Word 导出（用户点击时由程序用模板实时渲染，不占管道）
 
 实现：segments embedding 入 pgvector → 检索相关 segment → LLM 回答，回答强制携带 cited_segment_ids，前端据此渲染原文对照与音频跳转。
 
-> 现状：内容查询与原文引用已实现（pgvector 检索 + LLM 引用 segment，前端引用跳播）；「修改纪要」见 §7.1。
+> 现状：**已全面实现并超出本节规划**（RAG 设计 v1 三阶段，详见
+> `docs/TECH_DESIGN_MEETING_RAG_V1.md`）——多轮问题改写（意图分类合并为一次
+> LLM 调用）、三路召回（向量 / 说话人保底 / 关键词精确实体）+ RRF 融合、
+> anchor 优先的上下文预算、证据不足显式拒答 + confidence、embedding 模型
+> 身份校验、检索脱敏日志与离线评估工具（`scripts/EVAL_GUIDE.md`）。
+> 「修改纪要」见 §7.1（已实现）。
 
 ### Feature 6：Word 自动生成
 
 - 输入：Summary 的结构化 JSON（content_json）
 - 输出：Word 文件（公司固定模板、表格填充、标题格式）
 - 实现：docxtpl 填模板，纯程序步骤，与 LLM 完全解耦；用户点击导出时实时渲染
-- Summary 版本化：二期通过聊天修改纪要时生成新版本而非覆盖（复用 summarize 的 max(version)+1；改纪要须同步重建 ActionItem 以保证 Word 导出一致）
+- Summary 版本化：通过聊天修改纪要时生成新版本而非覆盖（复用 summarize 的 max(version)+1；改纪要同步重建 ActionItem 以保证 Word 导出一致）——**已实现**（见 §7.1）
 
 ### Feature 7：前端应用
 
@@ -182,6 +208,11 @@ API 服务（FastAPI：上传凭证、任务投递、状态查询、结果查询
 - **API 服务**：轻量，绝不在请求线程跑模型；上传采用「申请凭证 → 分片直传对象存储 → 通知确认」
 - **管道**：阶段独立、状态写回 Meeting、失败按阶段重试；「任务状态变更」发布为内部事件，通知渠道（轮询 / SSE / 二期微信订阅消息）作为订阅者实现
 - **LLM service**：屏蔽多厂商差异，统一 prompt 管理、JSON schema 校验、重试、成本记录
+
+  > 现状（M4 设计四阶段已全部实现）：任务级路由（按任务类型独立配置
+  > provider 顺序，glm_air / glm_flash / gemini / mock 多节点，失败自动降级）、
+  > Token 用量审计（llm_usage_records + `/api/llm-usage/stats` + 前端「模型用量」页）、
+  > 额度软限制与付费熔断（软上限 Air 让位低价值任务、到期/耗尽禁止静默付费）。
 - **Word 导出**：纯程序模块，读 Summary JSON 填模板
 
 ---
@@ -236,14 +267,24 @@ id, meeting_id, task, owner_person_id(nullable), owner_text,
 deadline, source_segment_id
 ```
 
-**ChatMessage（二期）**
+**ChatMessage（已上线）**
 ```
 id, meeting_id, role, content, cited_segment_ids, created_at
 ```
 
+> 数据模型现状补充：Meeting 另含纪要抬头字段（location/host/recorder/importance）
+> 与 `embedding_model_key`（向量模型身份，防同维换模型静默错检索）；新增表
+> `glossary_terms`（全局术语表/热词）、`summary_examples`（纪要范例库）、
+> `llm_usage_records`（LLM 用量审计，无外键、审计存活于业务删除）。
+> 以 alembic 迁移（0001–0008）为准。
+
 ---
 
 ## 6. MVP 范围（第一版，2 周）
+
+> 本节为 MVP 期间的历史基线，**已全部完成**（上传落地为服务端直传本地存储，
+> 对象存储仍待建）；「明确不包含」中的 AI 聊天问答已在二期实现（§7.1）。
+> 保留原文以记录当时的范围决策。
 
 ### 包含
 - 上传录音（预签名 URL 直传 + 分片）
@@ -284,30 +325,23 @@ id, meeting_id, role, content, cited_segment_ids, created_at
 > 标注现状：✅ 已实现 / 🟡 部分 / ⬜ 待建。步骤以当前代码为基线，尽量复用既有件。
 
 ### 7.1 AI 聊天
-- **查询会议内容（✅ 已实现）**：RAG 问答，pgvector 检索相关 segment → LLM 回答。
-  见 `app/services/qa.py`、`app/api/routes/chat.py`。
+- **查询会议内容（✅ 已实现，且已按 RAG 设计 v1 深度增强）**：多轮问题改写
+  （意图分类与改写合并为一次 LLM 调用、指代门控附引用证据）→ 三路召回
+  （向量 / 说话人每人保底 / 关键词精确实体 pg_trgm）→ RRF 融合 → anchor 优先
+  上下文预算 → 证据不足显式拒答 + confidence。见 `app/services/qa.py`、
+  `query_intent.py`、`retrieval.py` 与 `docs/TECH_DESIGN_MEETING_RAG_V1.md`。
 - **原文引用（✅ 已实现）**：LLM 引用 segment 编号（seq），程序反查真实 segment
-  落 `chat_messages.cited_segment_ids`，前端引用 chip 点击跳播。
-- **修改纪要 → Summary 新版本（⬜ 待建，本期重点）**：在同一聊天框内用自然语言
-  指令改纪要（如「把决策第二条改成…」「合并前两个议题」），生成新版本而非覆盖。
-  实现步骤：
-  1. 意图路由：聊天 POST 先用一次轻量 LLM 分类 `query | edit`（复用 `build_router`，
-     结构化输出 `{intent}`）。`query` 走现有 `answer_question`；`edit` 走改纪要分支。
-     （备选：前端加「编辑纪要」显式开关，避免误分类——若分类不稳再切换。）
-  2. 改纪要分支：取该会议最新 Summary 的 `content_json` + 用户指令，
-     （可选）附相关 segment 做依据 → LLM 产出完整新 `content_json`，
-     经 `SummaryContent` schema 校验（复用 `app/schemas/summary.py`）。
-  3. 落库新版本：复用 `summarize.py` 的 `max(version)+1` 模式写入 Summary；
-     `_meta` 记来源（如 `{"origin":"chat","edit_instruction":…}`）。
-  4. 重建 ActionItem：像 `summarize_meeting` 一样 delete+重插本会议 ActionItem
-     （seq→segment 反查 owner/source），否则 Word 导出 TODO 表与新纪要不一致。
-  5. 聊天回执：assistant 消息说明改了什么并标注新版本号；
-     （可选）`chat_messages` 加 `summary_version` 列记录该轮产出的版本（需迁移，审计用）。
-  6. 前端：`QaPanel` 增 `onSummaryUpdated` 回调 → `MeetingDetailPage.refresh` 重拉
-     `getSummary`，使纪要 tab 即时反映新版本（现有 done 后不再轮询，须显式刷新）。
+  落 `chat_messages.cited_segment_ids`（强制会议隔离），前端引用 chip 点击跳播。
+- **修改纪要 → Summary 新版本（✅ 已实现）**：同一聊天框内自然语言指令改纪要，
+  意图路由 `query | edit`，LLM 产出完整新 `content_json` 经 schema 校验，
+  `max(version)+1` 落库新版本（`_meta.origin="chat"` 记指令与基版本），
+  同步重建 ActionItem 保证 Word 导出一致；前端纪要 tab 即时刷新。
 - **版本历史 / 回滚（⬜ 增强，可选）**：`GET /summary` 目前只返回最新版。
   如需历史与回滚，加 `GET /meetings/{id}/summary/versions` 与 `?version=N`，
   回滚 = 复制旧版内容为新版本（仍不覆盖）。
+- **离线质量评估（✅ 工具已备）**：`scripts/qa_eval.py` + `scripts/EVAL_GUIDE.md`
+  （Recall/MRR/引用准确率/拒答率/RRF k 对比）；待用真实会议整理 50~100 题跑基线，
+  据此决定 RRF k 与是否引入 Reranker。
 
 ### 7.2 声纹记忆（🟡 部分）
 - 已实现：SeedASR 声纹匹配命中自动绑定（`auto_bind_voiceprints`）、Person 声纹登记、
@@ -317,8 +351,9 @@ id, meeting_id, role, content, cited_segment_ids, created_at
   补前端）；合规同意流（`Person.consent_record` 已有字段，补录入/展示）。
 
 ### 7.3 RAG 知识库（⬜ 待建）
-- 跨会议搜索：现有 segment embedding 检索限定单会议；放开 meeting_id 约束、
-  按 user 检索全部会议，答案标注来源会议+时间戳。
+- 跨会议搜索：单会议检索管线已完善（多轮改写 + 三路召回 + RRF，见 §7.1）；
+  跨会议 = 放开 meeting_id 约束、按 user 检索全部会议，答案标注来源会议+时间戳
+  （注意 embedding 模型身份已按会议记录，跨会议检索须校验各会议向量空间一致）。
 - 历史决策查询、纪要风格 RAG：纪要范例库（summary_examples）已按 few-shot 注入；
   二期可将历史纪要 embedding 化做检索式风格参照。
 
@@ -368,17 +403,18 @@ id, meeting_id, role, content, cited_segment_ids, created_at
 
 ## 10. 技术选型
 
-| 层 | 选型 | 说明 |
+| 层 | 选型 | 现状（2026-07） |
 |---|---|---|
-| 后端 | Python + FastAPI | 全栈统一 Python，ASR 生态所在 |
-| 任务 | MVP: BackgroundTasks → 二期 Celery+Redis | 阶段划分先行，执行器可替换 |
-| ASR | 云 ASR API（带说话人分离）优先；WhisperX 备选 | provider 接口可替换 |
-| 声纹 | pyannote / SpeechBrain（二期） | embedding 一期即留存 |
-| LLM | Claude / GPT / DeepSeek 等，经统一 service 抽象 | 成本记录、schema 校验 |
-| 数据库 | PostgreSQL + pgvector | 一库同时管结构化与向量，Milvus 规模化后再评估 |
-| 存储 | 对象存储（OSS/S3 类） | 预签名直传、range、生命周期归档 |
-| 文档 | docxtpl / python-docx | JSON → Word |
-| 前端 | React（逻辑与视图分离）或 Taro | 二期小程序复用 |
+| 后端 | Python + FastAPI | ✅ 已实现（async SQLAlchemy 2.0 + alembic） |
+| 任务 | MVP: BackgroundTasks → 二期 Celery+Redis | 🟡 仍为 BackgroundTasks；阶段幂等，换执行器即可 |
+| ASR | 云 ASR API（带说话人分离）优先；WhisperX 备选 | ✅ SeedASR 2.0（含云端声纹）/ 通义听悟 / 本地 FunASR / mock，provider 可切换 |
+| 声纹 | pyannote / SpeechBrain（二期） | 🟡 走 SeedASR 云端声纹（登记+自动绑定）；本地方案冻结，embedding 暗桩仍留存 |
+| LLM | 统一 service 抽象 + 任务级路由 | ✅ GLM-4.5-Air / GLM-Flash / Gemini 灾备；用量审计 + 额度熔断（M4 设计） |
+| Embedding | GLM embedding-3（pgvector 检索） | ✅ 单一 provider 不降级混用；模型身份随会议记录 |
+| 数据库 | PostgreSQL + pgvector（+ pg_trgm） | ✅ 向量检索 + 关键词 trigram 索引 |
+| 存储 | 对象存储（OSS/S3 类） | ⬜ 待建；MVP 为服务端直传本地磁盘 |
+| 文档 | docxtpl / python-docx | ✅ 已实现（公司模板可替换） |
+| 前端 | React（逻辑与视图分离）或 Taro | ✅ React + Vite + TS（api/ 与视图分离）；小程序待建 |
 
 ---
 

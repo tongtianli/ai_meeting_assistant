@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/meeting_assistant"
     )
+    # 应用日志级别（root logger，见 app/core/logging.py）；uvicorn 自身日志不受影响
+    log_level: str = "INFO"
     # 音频与中间产物根目录（MVP 本地磁盘；二期换对象存储时仅换存储实现）
     data_dir: Path = Path("./data")
     # ASR provider 选择（接口可替换，PRD §10）
