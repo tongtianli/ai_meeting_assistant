@@ -102,6 +102,7 @@ class MockLLMProvider(LLMProvider):
             payload = {
                 "answer": "根据会议记录，相关内容见引用片段。",
                 "cited_segment_seqs": cited,
+                "confidence": "high" if cited else "low",
             }
             text = json.dumps(payload, ensure_ascii=False)
         elif json_mode:

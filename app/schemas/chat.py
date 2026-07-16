@@ -10,11 +10,13 @@ class QaAnswer(BaseModel):
 
     insufficient_evidence（RAG 设计 §4.1.1-F）：证据不足时显式拒答；
     程序侧规则——事实性回答（false）必须带 ≥1 条本轮 context 内的合法引用。
+    confidence（§6.1）：模型自评证据充分度；拒答/回退路径程序强制 low。
     """
 
     answer: str
     cited_segment_seqs: list[int] = []
     insufficient_evidence: bool = False
+    confidence: Literal["high", "medium", "low"] = "medium"
 
 
 class ChatIntent(BaseModel):
@@ -53,4 +55,6 @@ class ChatMessageOut(BaseModel):
     citations: list[CitationOut] = []
     # 本轮改纪要产出的新版本号；仅 POST 响应携带（历史消息文本中已含版本号）
     summary_version: int | None = None
+    # 本轮回答的证据置信度（§6.1）；仅 POST 响应携带，历史消息不回填
+    confidence: str | None = None
     created_at: datetime

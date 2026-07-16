@@ -1,0 +1,27 @@
+[
+  {
+    "_comment": "样例文件：复制为 eval/qa_dataset.json 并替换为真实会议数据（建议 50~100 题，覆盖 §6.2 全部类型）。meeting_id 用真实会议 UUID；expected_segment_seqs 填该会议中能回答问题的 segment seq（推荐），或用 expected_segment_ids 填 UUID。category 取值：speaker/date/amount/action_item/decision/pronoun/comparison/cross_segment/negative/no_answer/general。no_answer 类不填期望证据、期望模型拒答。"
+  },
+  {
+    "meeting_id": "00000000-0000-0000-0000-000000000000",
+    "question": "王经理最后确定的上线日期是什么？",
+    "expected_segment_seqs": [42, 43],
+    "expected_answer": "下周三",
+    "category": "date",
+    "speaker": "王经理"
+  },
+  {
+    "meeting_id": "00000000-0000-0000-0000-000000000000",
+    "question": "本季度市场预算批了多少？",
+    "expected_segment_seqs": [17],
+    "expected_answer": "29.5 万",
+    "category": "amount"
+  },
+  {
+    "meeting_id": "00000000-0000-0000-0000-000000000000",
+    "question": "会上有没有讨论过办公室搬迁？",
+    "expected_segment_seqs": [],
+    "expected_answer": null,
+    "category": "no_answer"
+  }
+]
