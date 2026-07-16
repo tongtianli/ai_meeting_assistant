@@ -6,6 +6,12 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import update
 
+from app.core.logging import setup_logging
+
+# 在任何业务模块打日志之前配置 root logger（uvicorn 不管 root，
+# 否则检索/用量/质量等 INFO 日志在生产一条都看不到）
+setup_logging()
+
 from app.api.routes.audio import router as audio_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.chat import router as chat_router

@@ -315,6 +315,40 @@ def test_unresolved_expected_ids_reported_not_silent(tmp_path, monkeypatch) -> N
     assert any("未解析" in s for s in report["skipped"])
 
 
+def test_invalid_expected_seq_reported_and_dropped(tmp_path, monkeypatch) -> None:
+    """手工数据集手滑/编造的 seq → 显式报告并剔除，不静默压低召回。"""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    mid = asyncio.run(_seed_meeting(["API-203 定于下周三上线", "散会"]))
+    items = [
+        EvalItem(meeting_id=mid, question="API-203 何时上线",
+                 expected_seqs=[0, 999], category="date"),  # 999 不存在
+        EvalItem(meeting_id=mid, question="全错的题",
+                 expected_seqs=[888], category="date"),  # 全部无效 → 跳过
+    ]
+    report = asyncio.run(evaluate(items))
+    assert report["items"] == 1  # 全无效的题被跳过
+    assert sum("不存在的 seq" in s for s in report["skipped"]) == 2
+    assert report["retrieval"]["recall@5"] == 1.0  # 剔除 999 后按 [0] 计算
+
+
+def test_logging_setup_idempotent(monkeypatch) -> None:
+    import logging as _logging
+
+    from app.core.logging import setup_logging
+
+    root = _logging.getLogger()
+    before = list(root.handlers)
+    monkeypatch.setattr(settings, "log_level", "DEBUG")
+    setup_logging()
+    setup_logging()  # 幂等：不重复挂 handler
+    stream_handlers = [
+        h for h in root.handlers if isinstance(h, _logging.StreamHandler)
+    ]
+    assert len(stream_handlers) >= 1
+    assert len(root.handlers) <= len(before) + 1  # 至多新增一个
+    assert root.level == _logging.DEBUG  # 级别跟随 LOG_LEVEL
+
+
 def test_evaluate_with_answers_mock(tmp_path, monkeypatch) -> None:
     """--with-answers：mock LLM 下产出回答率/引用准确率/置信度分布。"""
     monkeypatch.setattr(settings, "data_dir", tmp_path)
