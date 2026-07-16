@@ -29,6 +29,11 @@ htmlcov/
 # 本地音频与中间产物
 data/
 
+# 真实会议评估集与转录导出（含真实会议内容，不入仓库；样例保留）
+eval/qa_dataset*.json
+!eval/qa_dataset.example.json
+transcript*.txt
+
 # 前端
 web/node_modules/
 web/dist/

@@ -21,8 +21,11 @@ uv run python scripts/dump_transcript.py --list
 ## 第 2 步：导出带 seq 的转录
 
 ```bash
-uv run python scripts/dump_transcript.py <meeting_id> > transcript.txt
+uv run python scripts/dump_transcript.py <meeting_id> > data/transcript.txt
 ```
+
+> 输出到 `data/`（已在 .gitignore）——转录是真实会议原文，不得误提交入仓库；
+> 仓库根目录的 `transcript*.txt` 也已加忽略规则兜底。
 
 输出格式（行首 `[N]` 就是 seq，出题时的证据引用全靠它）：
 
@@ -38,7 +41,7 @@ uv run python scripts/dump_transcript.py <meeting_id> > transcript.txt
 
 ## 第 3 步：与大模型对话出题
 
-把 `transcript.txt` 全文 + `eval/qa_dataset.example.json` 的内容一起粘给大模型，
+把 `data/transcript.txt` 全文 + `eval/qa_dataset.example.json` 的内容一起粘给大模型，
 提示词参考：
 
 > 以下是一场会议的转录（行首方括号内是 segment 编号 seq）和一个 JSON 格式样例。
@@ -61,7 +64,8 @@ uv run python scripts/dump_transcript.py <meeting_id> > transcript.txt
 - 删掉问题含糊、答案有争议的；
 - 抽查几条 `expected_segment_seqs`，对照转录确认 seq 指向的段落确实能回答问题；
 - 多场会议的题**合并成一个 JSON 数组**，存为 `eval/qa_dataset.json`
-  （该文件不入库控，`eval/` 下只有 example 提交）。
+  （已在 .gitignore：`eval/qa_dataset*.json` 均不入仓库、仅 example 保留——
+  真实题目含会议内容与说话人，属敏感数据）。
 
 > 不用担心 seq 手滑：评估时不存在的 seq 会被显式报告并剔除
 > （报告 `skipped` 字段），不会静默污染指标。

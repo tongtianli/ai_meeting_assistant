@@ -331,22 +331,75 @@ def test_invalid_expected_seq_reported_and_dropped(tmp_path, monkeypatch) -> Non
     assert report["retrieval"]["recall@5"] == 1.0  # 剔除 999 后按 [0] 计算
 
 
-def test_logging_setup_idempotent(monkeypatch) -> None:
+def _ama_handlers(root) -> list:
+    return [h for h in root.handlers if getattr(h, "_ama_handler", False)]
+
+
+def test_logging_adds_stdout_even_with_foreign_file_handler(
+    tmp_path, monkeypatch
+) -> None:
+    """已有 FileHandler（StreamHandler 子类）也不误判"已配置"，仍挂 stdout（review 修复）。"""
     import logging as _logging
 
     from app.core.logging import setup_logging
 
     root = _logging.getLogger()
-    before = list(root.handlers)
-    monkeypatch.setattr(settings, "log_level", "DEBUG")
-    setup_logging()
-    setup_logging()  # 幂等：不重复挂 handler
-    stream_handlers = [
-        h for h in root.handlers if isinstance(h, _logging.StreamHandler)
-    ]
-    assert len(stream_handlers) >= 1
-    assert len(root.handlers) <= len(before) + 1  # 至多新增一个
-    assert root.level == _logging.DEBUG  # 级别跟随 LOG_LEVEL
+    saved = list(root.handlers)
+    root.handlers = []
+    file_handler = _logging.FileHandler(tmp_path / "app.log")
+    root.addHandler(file_handler)
+    try:
+        setup_logging()
+        assert len(_ama_handlers(root)) == 1  # FileHandler 存在也照样挂 stdout
+    finally:
+        file_handler.close()
+        root.handlers = saved
+
+
+def test_logging_idempotent_and_level_sync(monkeypatch) -> None:
+    """重复调用不重复挂；级别更新同步到 root 与本模块 handler（review 修复）。"""
+    import logging as _logging
+
+    from app.core.logging import setup_logging
+
+    root = _logging.getLogger()
+    saved = list(root.handlers)
+    root.handlers = []
+    try:
+        monkeypatch.setattr(settings, "log_level", "INFO")
+        setup_logging()
+        setup_logging()
+        assert len(_ama_handlers(root)) == 1  # 幂等
+        monkeypatch.setattr(settings, "log_level", "DEBUG")
+        setup_logging()
+        assert len(_ama_handlers(root)) == 1
+        assert root.level == _logging.DEBUG
+        assert _ama_handlers(root)[0].level == _logging.DEBUG  # handler 级别同步
+    finally:
+        root.handlers = saved
+
+
+def test_real_eval_dataset_gitignored() -> None:
+    """真实评估集/转录导出被忽略、样例仍被跟踪（review 修复：防敏感数据误提交）。"""
+    import subprocess
+
+    def _ignored(path: str) -> bool:
+        return (
+            subprocess.run(
+                ["git", "check-ignore", "-q", path], capture_output=True
+            ).returncode
+            == 0
+        )
+
+    assert _ignored("eval/qa_dataset.json")
+    assert _ignored("eval/qa_dataset_v2.json")
+    assert _ignored("transcript.txt")
+    assert not _ignored("eval/qa_dataset.example.json")  # 样例保留
+    tracked = subprocess.run(
+        ["git", "ls-files", "eval/qa_dataset.example.json"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    assert tracked  # 样例确在版本控制中
 
 
 def test_evaluate_with_answers_mock(tmp_path, monkeypatch) -> None:
