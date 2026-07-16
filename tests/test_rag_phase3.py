@@ -223,6 +223,98 @@ def test_evaluate_rrf_k_override_restores(monkeypatch) -> None:
     assert settings.qa_rrf_k == before  # 评估后恢复配置
 
 
+def test_with_answers_is_readonly_and_single_retrieval(tmp_path, monkeypatch) -> None:
+    """评估工具只读（review 修复）：不写 ChatMessage；每题只检索一次。"""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    mid = asyncio.run(_seed_meeting(["API-203 定于下周三上线", "散会"]))
+
+    import app.services.qa as qa_mod
+
+    calls = {"retrieve": 0}
+    real_retrieve = qa_mod.retrieve_context
+
+    async def _counting(*a, **k):
+        calls["retrieve"] += 1
+        return await real_retrieve(*a, **k)
+
+    monkeypatch.setattr(qa_mod, "retrieve_context", _counting)
+
+    async def _msg_count() -> int:
+        from app.models import ChatMessage
+
+        async with SessionLocal() as session:
+            rows = await session.scalars(
+                select(ChatMessage).where(ChatMessage.meeting_id == mid)
+            )
+            return len(list(rows))
+
+    assert asyncio.run(_msg_count()) == 0
+    items = [
+        EvalItem(meeting_id=mid, question="API-203 何时上线", expected_seqs=[0],
+                 category="date"),
+    ]
+    asyncio.run(evaluate(items, with_answers=True))
+    assert asyncio.run(_msg_count()) == 0  # 评估不向真实会议写聊天记录
+    assert calls["retrieve"] == 1  # 每题只检索一次，答案复用同一份检索结果
+
+
+def test_evaluate_idempotent_across_runs(tmp_path, monkeypatch) -> None:
+    """同一 items 连续评估（如 --rrf-k 10,30,60）：期望集与指标不逐轮漂移（review 修复）。"""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    mid = asyncio.run(_seed_meeting(["API-203 定于下周三上线", "散会"]))
+
+    async def _seg_id() -> str:
+        async with SessionLocal() as session:
+            seg = await session.scalar(
+                select(TranscriptSegment).where(
+                    TranscriptSegment.meeting_id == mid,
+                    TranscriptSegment.seq == 0,
+                )
+            )
+            return str(seg.id)
+
+    sid = asyncio.run(_seg_id())
+    # 通过 expected_segment_ids（UUID 形式）构造，触发解析路径
+    import json as _json
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".json", delete=False, encoding="utf-8"
+    ) as f:
+        _json.dump(
+            [{"meeting_id": str(mid), "question": "API-203 何时上线",
+              "expected_segment_ids": [sid], "category": "date"}],
+            f, ensure_ascii=False,
+        )
+        path = f.name
+    items = load_dataset(path)
+
+    r1 = asyncio.run(evaluate(items, rrf_k=10))
+    r2 = asyncio.run(evaluate(items, rrf_k=30))
+    r3 = asyncio.run(evaluate(items, rrf_k=60))
+    # 期望集不因多轮评估膨胀 → 指标一致（召回内容相同）
+    assert (
+        r1["retrieval"]["recall@5"]
+        == r2["retrieval"]["recall@5"]
+        == r3["retrieval"]["recall@5"]
+        == 1.0
+    )
+    assert items[0].expected_seqs == []  # EvalItem 本身未被修改
+
+
+def test_unresolved_expected_ids_reported_not_silent(tmp_path, monkeypatch) -> None:
+    """期望 ID 不存在/属他会 → 显式进 skipped，不静默降级虚高报告（review 加固）。"""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    mid = asyncio.run(_seed_meeting(["一些内容"]))
+    items = [
+        EvalItem(meeting_id=mid, question="随便问问", expected_seqs=[], category="date")
+    ]
+    setattr(items[0], "_expected_ids", [uuid.uuid4()])  # 不存在的 segment ID
+    report = asyncio.run(evaluate(items))
+    assert report["items"] == 0  # 期望全未解析 → 跳过该题
+    assert any("未解析" in s for s in report["skipped"])
+
+
 def test_evaluate_with_answers_mock(tmp_path, monkeypatch) -> None:
     """--with-answers：mock LLM 下产出回答率/引用准确率/置信度分布。"""
     monkeypatch.setattr(settings, "data_dir", tmp_path)

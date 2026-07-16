@@ -548,6 +548,75 @@ async def retrieve_context(
     )
 
 
+@dataclass
+class AnswerOutcome:
+    """依据本轮 context 的生成结果（纯值对象，不含任何持久化）。"""
+
+    text: str
+    citations: list[CitationOut]
+    confidence: str
+    generation_ms: int
+
+
+async def generate_answer(question: str, ro: RetrievalOutcome) -> AnswerOutcome:
+    """依据已完成的检索结果生成并校验回答——**不写库、不产生聊天记录**。
+
+    问答热路径（_answer_question 随后负责落库）与离线评估（qa_eval
+    --with-answers）共用：评估工具保持只读，绝不向真实会议写 assistant
+    消息，也不重复检索。
+    """
+    names = ro.names
+    seg_by_seq = {s.seq: s for s in ro.context}
+    citations: list[CitationOut] = []
+    confidence = "low"  # 拒答/回退路径恒 low（§6.1）
+    if not ro.context:
+        return AnswerOutcome(_NO_ANSWER, [], confidence, 0)
+
+    lines = "\n".join(
+        f"[{s.seq}] [{_fmt_ts(s.start_time)}] "
+        f"{names.get(s.speaker_label, (None, s.speaker_label))[1]}: {s.text}"
+        for s in ro.context
+    )
+    t0 = time.monotonic()
+    try:
+        # QA 只输入检索后的少量片段，免费 Flash 优先；Air 仅作末位兜底
+        parsed, _ = await build_router(LLMTaskType.QA_ANSWER).generate_json(
+            SYSTEM_QA, qa_prompt(question, lines), QaAnswer
+        )
+        # 溯源硬约束：只采信落在本轮 context 上的引用，反查真实 segment
+        for seq in dict.fromkeys(parsed.cited_segment_seqs):  # 去重保序
+            seg = seg_by_seq.get(seq)
+            if seg is not None:
+                citations.append(
+                    CitationOut(
+                        seq=seg.seq,
+                        start_time=seg.start_time,
+                        speaker_name=names.get(
+                            seg.speaker_label, (None, seg.speaker_label)
+                        )[1],
+                        text=seg.text,
+                    )
+                )
+        if parsed.insufficient_evidence:
+            # 显式拒答：不携带引用，置信度恒 low
+            citations = []
+            answer_text = parsed.answer.strip() or _INSUFFICIENT
+        elif not citations:
+            # §4.1.1-F：事实性回答必须有 ≥1 条本轮 context 内的合法引用，
+            # 否则回退为明确拒答，不让无据结论流出
+            answer_text = _INSUFFICIENT
+        else:
+            answer_text = parsed.answer.strip() or _NO_ANSWER
+            confidence = parsed.confidence
+    except LLMExhaustedError as exc:
+        logger.warning("QA LLM exhausted: %s", exc)
+        answer_text = _NO_ANSWER
+        citations = []
+    return AnswerOutcome(
+        answer_text, citations, confidence, int((time.monotonic() - t0) * 1000)
+    )
+
+
 async def _answer_question(
     session: AsyncSession,
     meeting: Meeting,
@@ -563,57 +632,8 @@ async def _answer_question(
         recent_user, cited_texts,
     )
     latency.update(ro.latency_ms)
-    names = ro.names
-    context = ro.context
-
-    seg_by_seq = {s.seq: s for s in context}
-    citations: list[CitationOut] = []
-    confidence = "low"  # 拒答/回退路径恒 low（§6.1）
-    if not context:
-        answer_text = _NO_ANSWER
-        latency["generation"] = 0
-    else:
-        lines = "\n".join(
-            f"[{s.seq}] [{_fmt_ts(s.start_time)}] "
-            f"{names.get(s.speaker_label, (None, s.speaker_label))[1]}: {s.text}"
-            for s in context
-        )
-        t0 = time.monotonic()
-        try:
-            # QA 只输入检索后的少量片段，免费 Flash 优先；Air 仅作末位兜底
-            parsed, _ = await build_router(LLMTaskType.QA_ANSWER).generate_json(
-                SYSTEM_QA, qa_prompt(question, lines), QaAnswer
-            )
-            # 溯源硬约束：只采信落在本轮 context 上的引用，反查真实 segment
-            for seq in dict.fromkeys(parsed.cited_segment_seqs):  # 去重保序
-                seg = seg_by_seq.get(seq)
-                if seg is not None:
-                    citations.append(
-                        CitationOut(
-                            seq=seg.seq,
-                            start_time=seg.start_time,
-                            speaker_name=names.get(
-                                seg.speaker_label, (None, seg.speaker_label)
-                            )[1],
-                            text=seg.text,
-                        )
-                    )
-            if parsed.insufficient_evidence:
-                # 显式拒答：不携带引用，置信度恒 low
-                citations = []
-                answer_text = parsed.answer.strip() or _INSUFFICIENT
-            elif not citations:
-                # §4.1.1-F：事实性回答必须有 ≥1 条本轮 context 内的合法引用，
-                # 否则回退为明确拒答，不让无据结论流出
-                answer_text = _INSUFFICIENT
-            else:
-                answer_text = parsed.answer.strip() or _NO_ANSWER
-                confidence = parsed.confidence
-        except LLMExhaustedError as exc:
-            logger.warning("QA LLM exhausted for meeting %s: %s", meeting.id, exc)
-            answer_text = _NO_ANSWER
-            citations = []
-        latency["generation"] = int((time.monotonic() - t0) * 1000)
+    ans = await generate_answer(question, ro)
+    latency["generation"] = ans.generation_ms
 
     _log_retrieval(
         question,
@@ -624,16 +644,19 @@ async def _answer_question(
         stats=ro.stats,
         latency_ms=latency,
         candidates=ro.candidates,
-        confidence=confidence,
+        confidence=ans.confidence,
     )
 
+    seg_by_seq = {s.seq: s for s in ro.context}
     assistant = ChatMessage(
         meeting_id=meeting.id,
         role="assistant",
-        content=answer_text,
-        cited_segment_ids=[str(seg_by_seq[c.seq].id) for c in citations] or None,
+        content=ans.text,
+        cited_segment_ids=[str(seg_by_seq[c.seq].id) for c in ans.citations] or None,
     )
     session.add(assistant)
     await session.commit()
     await session.refresh(assistant)
-    return QaResult(assistant=assistant, citations=citations, confidence=confidence)
+    return QaResult(
+        assistant=assistant, citations=ans.citations, confidence=ans.confidence
+    )

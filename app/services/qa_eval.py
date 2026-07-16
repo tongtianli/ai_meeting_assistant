@@ -46,6 +46,9 @@ class EvalItem:
 @dataclass
 class ItemResult:
     item: EvalItem
+    # 本轮解析后的期望证据（seqs + 解析出的 ids，去重；不回写 EvalItem——
+    # 多组 rrf-k 连续评估时 items 复用，写回会跨轮污染指标）
+    expected_seqs: list[int] = field(default_factory=list)
     anchor_seqs: list[int] = field(default_factory=list)
     context_seqs: list[int] = field(default_factory=list)
     candidate_count: int = 0
@@ -131,17 +134,37 @@ def is_refusal(text: str) -> bool:
     return any(marker in text for marker in _REFUSALS)
 
 
-async def _resolve_expected_ids(session, item: EvalItem) -> None:
+async def _resolve_expected(
+    session, item: EvalItem
+) -> tuple[list[int], list[str]]:
+    """本轮的期望证据（seqs ∪ 解析后的 ids，去重）；**不修改 EvalItem**。
+
+    未解析的 ID（不存在或属其他会议）显式返回错误说明，不静默降级——
+    否则该 item 会从 scored_items 消失，报告虚高。
+    """
+    expected = list(dict.fromkeys(item.expected_seqs))
+    notes: list[str] = []
     ids = getattr(item, "_expected_ids", None)
-    if not ids:
-        return
-    rows = await session.scalars(
-        select(TranscriptSegment).where(
-            TranscriptSegment.id.in_(ids),
-            TranscriptSegment.meeting_id == item.meeting_id,
+    if ids:
+        rows = list(
+            await session.scalars(
+                select(TranscriptSegment).where(
+                    TranscriptSegment.id.in_(ids),
+                    TranscriptSegment.meeting_id == item.meeting_id,
+                )
+            )
         )
-    )
-    item.expected_seqs.extend(s.seq for s in rows)
+        found = {s.id: s.seq for s in rows}
+        missing = [str(i) for i in ids if i not in found]
+        if missing:
+            notes.append(
+                f"{item.meeting_id}「{item.question[:20]}」: "
+                f"{len(missing)} 个 expected_segment_ids 未解析（不存在或属其他会议）"
+            )
+        for i in ids:
+            if i in found and found[i] not in expected:
+                expected.append(found[i])
+    return expected, notes
 
 
 async def evaluate(
@@ -156,8 +179,7 @@ async def evaluate(
     """
     # 延迟导入：qa 依赖链较重，脚本 --help 不应加载
     from app.db.session import SessionLocal
-    from app.services.qa import retrieve_context
-    from app.services.query_intent import IntentResult
+    from app.services.qa import generate_answer, retrieve_context
 
     old_k = settings.qa_rrf_k
     if rrf_k is not None:
@@ -171,30 +193,34 @@ async def evaluate(
                 if meeting is None:
                     skipped.append(f"{item.meeting_id}: meeting 不存在")
                     continue
-                await _resolve_expected_ids(session, item)
+                expected, notes = await _resolve_expected(session, item)
+                skipped.extend(notes)
+                if not expected and item.category != "no_answer":
+                    skipped.append(
+                        f"{item.meeting_id}「{item.question[:20]}」: "
+                        "期望证据全部未解析，跳过该题"
+                    )
+                    continue
                 t0 = time.monotonic()
+                # 每题只检索一次；--with-answers 复用同一份检索结果生成回答
                 ro = await retrieve_context(
                     session, meeting, item.question, item.question
                 )
                 res = ItemResult(
                     item=item,
+                    expected_seqs=expected,
                     anchor_seqs=[s.seq for s in ro.anchors],
                     context_seqs=[s.seq for s in ro.context],
                     candidate_count=len(ro.candidates),
                     latency_ms=int((time.monotonic() - t0) * 1000),
                 )
                 if with_answers:
-                    from app.services.qa import _answer_question
-
-                    qa_res = await _answer_question(
-                        session, meeting, item.question,
-                        IntentResult("query", item.question, False, False),
-                        [], [], 0,
-                    )
-                    res.answered = not is_refusal(qa_res.assistant.content)
+                    # 纯生成：不写 ChatMessage——评估工具对业务数据只读
+                    ans = await generate_answer(item.question, ro)
+                    res.answered = not is_refusal(ans.text)
                     res.refused = not res.answered
-                    res.cited_seqs = [c.seq for c in qa_res.citations]
-                    res.confidence = qa_res.confidence
+                    res.cited_seqs = [c.seq for c in ans.citations]
+                    res.confidence = ans.confidence
                     res.latency_ms = int((time.monotonic() - t0) * 1000)
                 results.append(res)
     finally:
@@ -205,12 +231,12 @@ async def evaluate(
 def _build_report(
     results: list[ItemResult], skipped: list[str], rrf_k: int, with_answers: bool
 ) -> dict:
-    scored = [r for r in results if r.item.expected_seqs]
-    r5 = [recall_at_k(r.anchor_seqs, r.item.expected_seqs, 5) for r in scored]
-    r10 = [recall_at_k(r.anchor_seqs, r.item.expected_seqs, 10) for r in scored]
-    mrrs = [mrr(r.anchor_seqs, r.item.expected_seqs) for r in scored]
+    scored = [r for r in results if r.expected_seqs]
+    r5 = [recall_at_k(r.anchor_seqs, r.expected_seqs, 5) for r in scored]
+    r10 = [recall_at_k(r.anchor_seqs, r.expected_seqs, 10) for r in scored]
+    mrrs = [mrr(r.anchor_seqs, r.expected_seqs) for r in scored]
     ctx_hits = [
-        bool(set(r.item.expected_seqs) & set(r.context_seqs)) for r in scored
+        bool(set(r.expected_seqs) & set(r.context_seqs)) for r in scored
     ]
     cand_counts = [r.candidate_count for r in results]
     latencies = [r.latency_ms for r in results]
@@ -241,8 +267,8 @@ def _build_report(
         no_answer = [r for r in answered if r.item.category == "no_answer"]
         cited_prec: list[float] = []
         for r in answered:
-            if r.item.expected_seqs and r.cited_seqs:
-                hit = len(set(r.cited_seqs) & set(r.item.expected_seqs))
+            if r.expected_seqs and r.cited_seqs:
+                hit = len(set(r.cited_seqs) & set(r.expected_seqs))
                 cited_prec.append(hit / len(r.cited_seqs))
         report["answers"] = {
             "answered_rate": round(
@@ -272,7 +298,7 @@ def _build_report(
                         [
                             x
                             for x in (
-                                recall_at_k(r.anchor_seqs, r.item.expected_seqs, 5)
+                                recall_at_k(r.anchor_seqs, r.expected_seqs, 5)
                                 for r in cat_scored
                             )
                             if x is not None
