@@ -47,6 +47,23 @@ class QaResult:
     assistant: ChatMessage
     citations: list[CitationOut]
     summary_version: int | None = None
+    # 本轮回答的证据置信度（§6.1）；拒答/回退路径恒为 low，编辑路径为 None
+    confidence: str | None = None
+
+
+@dataclass
+class RetrievalOutcome:
+    """一次检索的完整产物；问答热路径与离线评估（qa_eval）共用。"""
+
+    context: list[TranscriptSegment]
+    anchors: list[TranscriptSegment]
+    candidates: list  # list[RetrievalCandidate]
+    stats: "ContextStats"
+    names: dict
+    person_ids: list[uuid.UUID]
+    suspicious: list[str]
+    source_counts: dict[str, int]
+    latency_ms: dict[str, int]
 
 
 # ---------- 说话人匹配（§4.1.1-C）----------
@@ -268,10 +285,12 @@ def _log_retrieval(
     stats: ContextStats,
     latency_ms: dict[str, int],
     candidates: list[RetrievalCandidate] | None = None,
+    confidence: str | None = None,
 ) -> None:
     payload: dict = {
         "question_hash": "sha256:"
         + hashlib.sha256(question.encode("utf-8")).hexdigest()[:16],
+        "confidence": confidence,
         "standalone_query_changed": intent_res.rewritten,
         "used_cited_context": intent_res.used_cited_context,
         "matched_person_count": matched_person_count,
@@ -446,23 +465,28 @@ async def _handle_edit(
     return QaResult(assistant=assistant, citations=[], summary_version=version)
 
 
-async def _answer_question(
+async def retrieve_context(
     session: AsyncSession,
     meeting: Meeting,
     question: str,
-    intent_res: IntentResult,
-    recent_user: list[str],
-    cited_texts: list[str],
-    rewrite_ms: int,
-) -> QaResult:
-    latency: dict[str, int] = {"intent_rewrite": rewrite_ms}
+    standalone_query: str,
+    recent_user: list[str] | None = None,
+    cited_texts: list[str] | None = None,
+) -> RetrievalOutcome:
+    """三路召回 → RRF 融合 → anchor 优先预算，一站产出本轮 context。
+
+    问答热路径与离线评估（qa_eval，§6.2）共用本函数，检索管线不双写。
+    """
+    recent_user = recent_user or []
+    cited_texts = cited_texts or []
+    latency: dict[str, int] = {}
     segments = await _all_segments(session, meeting.id)
     seg_by_seq_all = {s.seq: s for s in segments}
 
     t0 = time.monotonic()
     embedder = get_embedder()
     # 改写后的问题用于 embedding（原问题只用于最终回答语气）
-    qvec = (await embedder.embed([intent_res.standalone_query]))[0]
+    qvec = (await embedder.embed([standalone_query]))[0]
     await ensure_embeddings(session, meeting, segments, expected_dim=len(qvec))
     latency["embedding"] = int((time.monotonic() - t0) * 1000)
 
@@ -470,7 +494,7 @@ async def _answer_question(
     # 说话人匹配并集：改写臆造的人名不得成为强召回条件
     allowed_ctx = "\n".join([question, *recent_user, *cited_texts])
     person_ids, suspicious, _persons_truncated = match_speakers_union(
-        names, question, intent_res.standalone_query, allowed_ctx
+        names, question, standalone_query, allowed_ctx
     )
     if suspicious:
         logger.warning(
@@ -485,7 +509,7 @@ async def _answer_question(
         session, meeting.id, qvec, person_ids, settings.qa_per_person_k
     )
     # 关键词/精确实体召回（§5.2）：从改写后问题提取精确 token
-    tokens = extract_keywords(intent_res.standalone_query)
+    tokens = extract_keywords(standalone_query)
     keyword_by_token = await retrieve_keyword_anchors(
         session, meeting.id, tokens, settings.qa_keyword_top_k_per_token, qvec=qvec
     )
@@ -506,9 +530,45 @@ async def _answer_question(
         settings.qa_max_context_segments,
     )
     latency["retrieval"] = int((time.monotonic() - t0) * 1000)
+    return RetrievalOutcome(
+        context=context,
+        anchors=anchors,
+        candidates=candidates,
+        stats=stats,
+        names=names,
+        person_ids=person_ids,
+        suspicious=suspicious,
+        source_counts={
+            "vector": len(vector),
+            "speaker": sum(len(v) for v in speaker_by_person.values()),
+            "keyword": sum(len(v) for v in keyword_by_token.values()),
+            "keyword_tokens": len(tokens),
+        },
+        latency_ms=latency,
+    )
+
+
+async def _answer_question(
+    session: AsyncSession,
+    meeting: Meeting,
+    question: str,
+    intent_res: IntentResult,
+    recent_user: list[str],
+    cited_texts: list[str],
+    rewrite_ms: int,
+) -> QaResult:
+    latency: dict[str, int] = {"intent_rewrite": rewrite_ms}
+    ro = await retrieve_context(
+        session, meeting, question, intent_res.standalone_query,
+        recent_user, cited_texts,
+    )
+    latency.update(ro.latency_ms)
+    names = ro.names
+    context = ro.context
 
     seg_by_seq = {s.seq: s for s in context}
     citations: list[CitationOut] = []
+    confidence = "low"  # 拒答/回退路径恒 low（§6.1）
     if not context:
         answer_text = _NO_ANSWER
         latency["generation"] = 0
@@ -539,7 +599,7 @@ async def _answer_question(
                         )
                     )
             if parsed.insufficient_evidence:
-                # 显式拒答：不携带引用
+                # 显式拒答：不携带引用，置信度恒 low
                 citations = []
                 answer_text = parsed.answer.strip() or _INSUFFICIENT
             elif not citations:
@@ -548,6 +608,7 @@ async def _answer_question(
                 answer_text = _INSUFFICIENT
             else:
                 answer_text = parsed.answer.strip() or _NO_ANSWER
+                confidence = parsed.confidence
         except LLMExhaustedError as exc:
             logger.warning("QA LLM exhausted for meeting %s: %s", meeting.id, exc)
             answer_text = _NO_ANSWER
@@ -557,17 +618,13 @@ async def _answer_question(
     _log_retrieval(
         question,
         intent_res,
-        matched_person_count=len(person_ids),
-        suspicious_names=suspicious,
-        source_counts={
-            "vector": len(vector),
-            "speaker": sum(len(v) for v in speaker_by_person.values()),
-            "keyword": sum(len(v) for v in keyword_by_token.values()),
-            "keyword_tokens": len(tokens),
-        },
-        stats=stats,
+        matched_person_count=len(ro.person_ids),
+        suspicious_names=ro.suspicious,
+        source_counts=ro.source_counts,
+        stats=ro.stats,
         latency_ms=latency,
-        candidates=candidates,
+        candidates=ro.candidates,
+        confidence=confidence,
     )
 
     assistant = ChatMessage(
@@ -579,4 +636,4 @@ async def _answer_question(
     session.add(assistant)
     await session.commit()
     await session.refresh(assistant)
-    return QaResult(assistant=assistant, citations=citations)
+    return QaResult(assistant=assistant, citations=citations, confidence=confidence)

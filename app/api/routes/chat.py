@@ -80,4 +80,5 @@ async def ask(
         result = await handle_chat(db, meeting, body.question.strip())
     out = await _to_out(db, meeting_id, result.assistant)
     out.summary_version = result.summary_version  # 前端据此刷新纪要 tab
+    out.confidence = result.confidence  # 证据置信度（§6.1，仅 POST 响应）
     return out

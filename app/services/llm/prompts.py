@@ -153,7 +153,8 @@ _QA_SCHEMA_DESC = """输出 JSON 对象，字段如下：
 {
   "answer": "对问题的回答（简洁中文；证据不足则回答'会议原文中没有找到明确结论'）",
   "cited_segment_seqs": [引用到的 segment 编号（整数）列表，无则空数组],
-  "insufficient_evidence": 布尔值（片段不足以回答时为 true，此时引用必须为空数组）
+  "insufficient_evidence": 布尔值（片段不足以回答时为 true，此时引用必须为空数组）,
+  "confidence": "high|medium|low（证据充分且直接为 high；有依据但需少量推断为 medium；证据不足为 low）"
 }"""
 
 
