@@ -25,6 +25,12 @@ from app.services.embeddings import get_embedder
 from app.services.llm import LLMExhaustedError, LLMTaskType, build_router
 from app.services.llm.prompts import SYSTEM_QA, qa_prompt
 from app.services.query_intent import IntentResult, classify_and_rewrite, has_anaphora
+from app.services.retrieval import (
+    RetrievalCandidate,
+    extract_keywords,
+    fuse_anchors,
+    retrieve_keyword_anchors,
+)
 from app.services.speakers import active_speaker_names
 from app.services.summarize import _fmt_ts
 from app.services.summary_edit import NoSummaryYet, edit_summary
@@ -188,35 +194,7 @@ async def retrieve_speaker_anchors(
     return out
 
 
-def merge_anchors(
-    vector: list[TranscriptSegment],
-    speaker_by_person: dict[uuid.UUID, list[TranscriptSegment]],
-    person_order: list[uuid.UUID],
-    min_protected_per_person: int,
-) -> list[TranscriptSegment]:
-    """合并去重成 anchors_by_rank（列表序 = rank，Phase 1 不引入 RRF）。
-
-    顺序（§4.1.1-E 策略 a）：每人保底的**受保护** speaker anchor 最先——
-    点名问题（"王建国说了什么"）不被 vector 挤掉；其后 vector（距离序）；
-    最后各人剩余 speaker anchor。
-    """
-    seen: set[uuid.UUID] = set()
-    ordered: list[TranscriptSegment] = []
-
-    def _add(seg: TranscriptSegment) -> None:
-        if seg.id not in seen:
-            seen.add(seg.id)
-            ordered.append(seg)
-
-    for pid in person_order:  # 受保护配额，按人在问题中的出现序
-        for seg in speaker_by_person.get(pid, [])[:min_protected_per_person]:
-            _add(seg)
-    for seg in vector:
-        _add(seg)
-    for pid in person_order:
-        for seg in speaker_by_person.get(pid, [])[min_protected_per_person:]:
-            _add(seg)
-    return ordered
+# Phase 2 起，anchor 合并由 retrieval.fuse_anchors（三路 RRF + 受保护钉前）完成
 
 
 # ---------- anchor 优先的上下文预算（§4.1.1-D）----------
@@ -289,6 +267,7 @@ def _log_retrieval(
     source_counts: dict[str, int],
     stats: ContextStats,
     latency_ms: dict[str, int],
+    candidates: list[RetrievalCandidate] | None = None,
 ) -> None:
     payload: dict = {
         "question_hash": "sha256:"
@@ -305,6 +284,12 @@ def _log_retrieval(
         "truncated": stats.truncated,
         "latency_ms": latency_ms,
     }
+    if candidates:
+        # §5.4 可观测性：每个候选的召回来源（只含 seq 与来源名，不含原文）
+        payload["candidate_sources"] = [
+            {"seq": c.segment.seq, "src": sorted(c.sources)}
+            for c in candidates[:40]
+        ]
     if settings.qa_retrieval_debug_text:  # 明文仅显式开启才记录
         payload["original_question"] = question
         payload["standalone_query"] = intent_res.standalone_query
@@ -499,11 +484,20 @@ async def _answer_question(
     speaker_by_person = await retrieve_speaker_anchors(
         session, meeting.id, qvec, person_ids, settings.qa_per_person_k
     )
-    anchors = merge_anchors(
+    # 关键词/精确实体召回（§5.2）：从改写后问题提取精确 token
+    tokens = extract_keywords(intent_res.standalone_query)
+    keyword_by_token = await retrieve_keyword_anchors(
+        session, meeting.id, tokens, settings.qa_keyword_top_k_per_token
+    )
+    # 三路 RRF 融合（§5.3）；受保护 speaker anchor 仍钉前（§4.1.1-E）
+    anchors, candidates = fuse_anchors(
         vector,
         speaker_by_person,
         person_ids,
         settings.qa_min_speaker_anchors_per_person,
+        keyword_by_token,
+        tokens,
+        settings.qa_rrf_k,
     )
     context, stats = budget_context(
         anchors,
@@ -568,9 +562,12 @@ async def _answer_question(
         source_counts={
             "vector": len(vector),
             "speaker": sum(len(v) for v in speaker_by_person.values()),
+            "keyword": sum(len(v) for v in keyword_by_token.values()),
+            "keyword_tokens": len(tokens),
         },
         stats=stats,
         latency_ms=latency,
+        candidates=candidates,
     )
 
     assistant = ChatMessage(
