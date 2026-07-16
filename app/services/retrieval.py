@@ -61,15 +61,17 @@ def extract_keywords(query: str) -> list[str]:
     tokens: list[str] = []
     seen: set[str] = set()
     spans: list[tuple[int, int]] = []
-    # 全局出现序；同起点取最长（实体天然长于其英文子串，故实体优先成立）
+    # 全局出现序；同起点取最长（实体天然长于其英文子串，故实体优先成立）。
+    # "区间占用"与"token 去重"分离：重复出现的实体虽不重复输出，但仍要
+    # 占用其命中区间——否则第二次出现的 "API-203" 挡不住子串 "API"（review 修复）
     for start, end, tok in sorted(candidates, key=lambda c: (c[0], -c[1])):
-        if any(s < end and start < e for s, e in spans):  # 与已取区间重叠
+        if any(s < end and start < e for s, e in spans):  # 与已占区间重叠
             continue
+        spans.append((start, end))
         key = tok.strip().lower()
         if key and key not in seen:
             seen.add(key)
             tokens.append(tok.strip())
-            spans.append((start, end))
     return tokens[:max_tokens]
 
 

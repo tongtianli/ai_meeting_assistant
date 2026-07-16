@@ -76,6 +76,11 @@ def test_extract_lowercase_code_and_v_prefix_version() -> None:
     assert extract_keywords("涨了 29.5 个点") == []
 
 
+def test_repeated_entity_still_blocks_english_substring() -> None:
+    """重复出现的实体仍占用命中区间：第二个 API-203 的子串 API 不得漏出（review 修复）。"""
+    assert extract_keywords("API-203 第一次，API-203 第二次") == ["API-203"]
+
+
 def test_escape_like_literals() -> None:
     assert _escape_like("100%") == "100\\%"
     assert _escape_like("a_b") == "a\\_b"
