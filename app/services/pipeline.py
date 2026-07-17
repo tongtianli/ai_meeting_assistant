@@ -26,6 +26,7 @@ from app.models import (
 from app.services.asr import get_asr_provider
 from app.services.llm.usage import usage_context
 from app.services.speakers import auto_bind_voiceprints
+from app.services.voiceprints import identify_speakers
 from app.services.summarize import summarize_meeting
 from app.services.storage import get_audio_storage
 from app.services.transcode import transcode_to_wav16k_mono
@@ -163,7 +164,8 @@ async def _stage_transcribe(
     )
     session.add_all(
         VoiceSample(
-            source_meeting_id=meeting.id,  # person_id 留空：二期声纹绑定后物化（暗桩）
+            source_meeting_id=meeting.id,  # person_id 留空：human 绑定后物化归属
+            speaker_label=e.speaker_label,
             embedding=e.embedding,
             model_name=e.model_name,
             model_version=e.model_version,
@@ -177,6 +179,9 @@ async def _stage_transcribe(
     bound = await auto_bind_voiceprints(session, meeting, result.segments)
     if bound:
         logger.info("voiceprint auto-binding: %d speakers bound", bound)
+    # 本地声纹记忆识人（声纹设计 §4.2）：对剩余未绑 speaker 做跨会议匹配，
+    # 结果落日志；仅 VOICEPRINT_AUTO_BIND_ENABLED 且门槛全过才自动绑定
+    await identify_speakers(session, meeting)
     await session.commit()
 
 

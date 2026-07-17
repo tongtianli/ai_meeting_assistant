@@ -119,7 +119,9 @@ Word 导出（用户点击时由程序用模板实时渲染，不占管道）
 - 用户确认 Speaker A = Tim 后保存声音特征；后续会议自动匹配
 - 匹配结果分三档：高置信自动绑定 / 中置信待人工确认 / 低于阈值创建新 Person 或标记未知
 - 支持一人多声音样本、人工确认、未知用户、重新绑定（绑定为追加式事件，可回滚、可审计）
-- 合规（见 §9.4）：声纹属敏感个人信息，需单独同意与物理级联删除
+- 合规（见 §9.4）：当前单用户版本不在产品内强制单独同意流程；保留同意记录
+  字段与物理级联删除、云端清理能力，多用户/商业部署时重新评估
+- 技术方案见 `docs/TECH_DESIGN_VOICEPRINT_MEMORY_V1.md`（已定稿，分三阶段落地）
 
 ### Feature 3：AI 生成会议纪要
 
@@ -343,12 +345,15 @@ id, meeting_id, role, content, cited_segment_ids, created_at
   （Recall/MRR/引用准确率/拒答率/RRF k 对比）；待用真实会议整理 50~100 题跑基线，
   据此决定 RRF k 与是否引入 Reranker。
 
-### 7.2 声纹记忆（🟡 部分）
+### 7.2 声纹记忆（🟡 部分，技术方案 `TECH_DESIGN_VOICEPRINT_MEMORY_V1.md` 已定稿）
 - 已实现：SeedASR 声纹匹配命中自动绑定（`auto_bind_voiceprints`）、Person 声纹登记、
-  删除 Person 云端清理提示。
-- 待建：三档置信度流（高置信自动绑 / 中置信「待人工确认」队列 + 确认 UI /
-  低置信新建 Person 或标记未知）；绑定回滚 UI（SpeakerBinding 已是追加式可回滚，
-  补前端）；合规同意流（`Person.consent_record` 已有字段，补录入/展示）。
+  删除 Person 云端清理提示；本地声纹记忆基础（声纹设计 Phase 1）——重命名即
+  隐式登记（human 绑定按 binding 物化样本归属，可改绑/撤销）、跨会议本地匹配
+  `match_local_voiceprints`（同模型分桶 + 三档收口，结果落日志）、
+  `speaker_identity_dismissals` 跳过记录 + pending 动态计算。
+- 待建：确认卡 UI + 待确认列表 API + 绑定回滚 UI（声纹设计 Phase 2）；
+  SeedASR RegisterVoicePrint 业务集成与删除云端自动清理、真实数据校准阈值后
+  评估开启本地自动绑定（Phase 3，`VOICEPRINT_AUTO_BIND_ENABLED` 默认关）。
 
 ### 7.3 RAG 知识库（⬜ 待建）
 - 跨会议搜索：单会议检索管线已完善（多轮改写 + 三路召回 + RRF，见 §7.1）；
@@ -391,7 +396,10 @@ id, meeting_id, role, content, cited_segment_ids, created_at
 ### 9.4 安全与合规
 - 录音为高敏感数据：存储加密、删除即物理删除、明确数据保留策略（一期即落实）
 - 音频不可变：无自动清理策略，删除仅由用户显式触发；长期用低频/归档存储控制成本
-- 声纹（二期）：属《个人信息保护法》敏感个人信息，需单独同意（Person.consent_record）、支持物理级联删除；注意「参会人」与「系统用户」非同一批人的授权流程设计
+- 声纹：当前单用户版本不在产品内强制执行单独同意流程；保留同意记录字段
+  （`Person.consent_record`，`VOICEPRINT_REQUIRE_CONSENT` 可重新强制）、物理级联
+  删除和云端清理能力。未来进入多用户、团队或商业部署场景时，重新评估告知、
+  授权及敏感信息处理要求（含「参会人」与「系统用户」非同一批人的授权流程设计）
 
 ### 9.5 成本模型（决策参考）
 - 变动成本约 ¥2-6 / 音频小时（云 ASR ¥1-3 + LLM ¥0.1-3 + 存储忽略不计）
@@ -408,7 +416,7 @@ id, meeting_id, role, content, cited_segment_ids, created_at
 | 后端 | Python + FastAPI | ✅ 已实现（async SQLAlchemy 2.0 + alembic） |
 | 任务 | MVP: BackgroundTasks → 二期 Celery+Redis | 🟡 仍为 BackgroundTasks；阶段幂等，换执行器即可 |
 | ASR | 云 ASR API（带说话人分离）优先；WhisperX 备选 | ✅ SeedASR 2.0（含云端声纹）/ 通义听悟 / 本地 FunASR / mock，provider 可切换 |
-| 声纹 | pyannote / SpeechBrain（二期） | 🟡 走 SeedASR 云端声纹（登记+自动绑定）；本地方案冻结，embedding 暗桩仍留存 |
+| 声纹 | pyannote / SpeechBrain（二期） | 🟡 双后端：SeedASR 云端声纹（登记+自动绑定）+ 本地 embedding 比对（Phase 1 已落地，pgvector cosine 同模型分桶；自动绑定待校准开启） |
 | LLM | 统一 service 抽象 + 任务级路由 | ✅ GLM-4.5-Air / GLM-Flash / Gemini 灾备；用量审计 + 额度熔断（M4 设计） |
 | Embedding | GLM embedding-3（pgvector 检索） | ✅ 单一 provider 不降级混用；模型身份随会议记录 |
 | 数据库 | PostgreSQL + pgvector（+ pg_trgm） | ✅ 向量检索 + 关键词 trigram 索引 |

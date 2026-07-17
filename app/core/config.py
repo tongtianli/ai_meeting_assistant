@@ -60,8 +60,21 @@ class Settings(BaseSettings):
     # URL 模式签名的有效期：需覆盖任务排队 + 云端拉取的全过程
     seedasr_url_ttl_seconds: int = 7200
     # 声纹自动绑定的最低置信度（0 = 信任云端阈值，命中即绑定；
-    # 返回带 score 时可调高做二次过滤，如 0.6）
+    # 返回带 score 时可调高做二次过滤，如 0.6）——云端（SeedASR）命中路径
     voiceprint_auto_bind_min_confidence: float = 0.0
+
+    # ---- 本地声纹记忆（TECH_DESIGN_VOICEPRINT_MEMORY_V1 §4.2/§5，Phase 1）----
+    # 注意（决议 7）：以下阈值均为**未经校准的开发占位值**，不构成可靠生产
+    # 默认值；须按 model_name+version 分桶用真实数据校准。校准完成前
+    # 自动绑定保持关闭（匹配结果仅落日志与内部接口，供确认卡与校准用）
+    voiceprint_auto_bind_enabled: bool = False  # 校准前恒 false
+    voiceprint_auto_bind_threshold: float = 0.8  # 占位：top1 score 下限
+    voiceprint_ask_threshold: float = 0.6  # 占位：≥进候选确认，<开放式询问
+    voiceprint_auto_bind_min_margin: float = 0.1  # 占位：top1-top2 下限
+    voiceprint_min_sample_seconds: float = 5.0  # 占位：查询样本最短时长
+    voiceprint_min_reference_samples: int = 1  # 占位：Person 同桶参考样本数下限
+    # 声纹登记是否强制同意记录（决议 1：单用户版本不强制，仅预留开关）
+    voiceprint_require_consent: bool = False
 
     # 鉴权（PRD §9.2：全站 Bearer Token JWT，MVP 单默认用户）
     # HS256 密钥需 ≥32 字节；生产环境必须通过环境变量覆盖
@@ -227,6 +240,28 @@ class Settings(BaseSettings):
                 raise ValueError(f"{name} 必须 >= 0")
         if self.qa_rrf_k <= 0:
             raise ValueError("QA_RRF_K 必须 > 0")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_voiceprint(self) -> "Settings":
+        """本地声纹门槛启动校验：错误配置直接拒绝启动。"""
+        for name, value in {
+            "VOICEPRINT_AUTO_BIND_THRESHOLD": self.voiceprint_auto_bind_threshold,
+            "VOICEPRINT_ASK_THRESHOLD": self.voiceprint_ask_threshold,
+        }.items():
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} 必须在 [0, 1]")
+        if self.voiceprint_ask_threshold > self.voiceprint_auto_bind_threshold:
+            raise ValueError(
+                "VOICEPRINT_ASK_THRESHOLD 不得大于 VOICEPRINT_AUTO_BIND_THRESHOLD"
+                "（三档收口：ask ≤ auto）"
+            )
+        if self.voiceprint_auto_bind_min_margin < 0:
+            raise ValueError("VOICEPRINT_AUTO_BIND_MIN_MARGIN 必须 >= 0")
+        if self.voiceprint_min_sample_seconds < 0:
+            raise ValueError("VOICEPRINT_MIN_SAMPLE_SECONDS 必须 >= 0")
+        if self.voiceprint_min_reference_samples < 1:
+            raise ValueError("VOICEPRINT_MIN_REFERENCE_SAMPLES 必须 >= 1")
         return self
 
 

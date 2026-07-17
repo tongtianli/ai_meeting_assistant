@@ -1,8 +1,9 @@
-"""Person 管理 API：声纹 ID 登记、同意记录强制、删除的 PIPL 提示。"""
+"""Person 管理 API：声纹 ID 登记、同意记录（默认可选，可开关强制）、删除的清理提示。"""
 import uuid
 
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.main import app
 from tests.conftest import auth_headers, requires_db
 
@@ -27,13 +28,16 @@ def test_person_crud_and_voiceprint_flow() -> None:
             created.append(plain["id"])
             assert plain["voiceprint_id"] is None
 
-            # 登记声纹但缺同意记录 → 422（PRD §9.4）
+            # 登记声纹不再强制同意记录（声纹设计 §1，决议 1）→ 201
             resp = client.post(
                 "/api/persons",
-                json={"name": "小王", "voiceprint_id": _vp()},
+                json={"name": "无同意记录", "voiceprint_id": _vp()},
                 headers=headers,
             )
-            assert resp.status_code == 422
+            assert resp.status_code == 201, resp.text
+            no_consent = resp.json()
+            created.append(no_consent["id"])
+            assert no_consent["consent_record"] is None
 
             # 声纹 + 同意记录 → 201，consent_record 带时间戳
             vp_id = _vp()
@@ -94,3 +98,16 @@ def test_person_crud_and_voiceprint_flow() -> None:
 def test_person_requires_auth() -> None:
     with TestClient(app) as client:
         assert client.get("/api/persons").status_code in (401, 403)
+
+
+def test_voiceprint_consent_enforced_by_flag(monkeypatch) -> None:
+    """VOICEPRINT_REQUIRE_CONSENT=true 时恢复强制（多用户/商业部署预留）。"""
+    monkeypatch.setattr(settings, "voiceprint_require_consent", True)
+    with TestClient(app) as client:
+        headers = auth_headers(client)
+        resp = client.post(
+            "/api/persons",
+            json={"name": "需同意", "voiceprint_id": _vp()},
+            headers=headers,
+        )
+        assert resp.status_code == 422

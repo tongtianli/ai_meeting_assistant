@@ -3,10 +3,12 @@
 声纹注册流程（MVP，云端注册 API 打通前）：
 1. 火山控制台「声纹管理」上传 ≥10s 纯净人声样本（16kHz/16bit 单声道 wav），
    命名后得到声纹 ID
-2. POST /persons 登记（name + voiceprint_id + 本人同意记录）
+2. POST /persons 登记（name + voiceprint_id；同意记录可选）
 3. 之后的转写自动携带 voice_print_list，命中即自动绑定说话人
 
-PIPL：声纹为敏感个人信息。删除 Person 时本地关联立即级联；
+合规（声纹设计 §1，决议 1）：当前单用户版本不在产品内强制执行单独同意流程；
+保留同意记录字段（consent_note 可选，VOICEPRINT_REQUIRE_CONSENT 可重新强制）、
+物理级联删除与云端清理能力。删除 Person 时本地关联立即级联；
 云端样本在注册 API 打通前需人工在控制台同步删除（响应中明确提示）。
 """
 from datetime import datetime, timezone
@@ -17,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.security import require_user
 from app.db.session import get_db
 from app.models import Person
@@ -60,8 +63,11 @@ async def create_person(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(require_user),
 ) -> Person:
-    if body.voiceprint_id and not body.consent_note:
-        # PRD §9.4：声纹登记必须留存本人同意记录
+    if (
+        settings.voiceprint_require_consent
+        and body.voiceprint_id
+        and not body.consent_note
+    ):
         raise HTTPException(
             status_code=422,
             detail="consent_note is required when registering a voiceprint_id",
@@ -93,7 +99,11 @@ async def update_person(
     user_id: UUID = Depends(require_user),
 ) -> Person:
     person = await _get_person_or_404(db, person_id, user_id)
-    if body.voiceprint_id and not (body.consent_note or person.consent_record):
+    if (
+        settings.voiceprint_require_consent
+        and body.voiceprint_id
+        and not (body.consent_note or person.consent_record)
+    ):
         raise HTTPException(
             status_code=422,
             detail="consent_note is required when registering a voiceprint_id",
