@@ -7,6 +7,7 @@ from app.models.llm_usage import LlmUsageRecord
 from app.models.meeting import Meeting
 from app.models.person import Person
 from app.models.speaker_binding import SpeakerBinding
+from app.models.speaker_identity_dismissal import SpeakerIdentityDismissal
 from app.models.summary import Summary
 from app.models.summary_example import SummaryExample
 from app.models.transcript_segment import TranscriptSegment
@@ -26,6 +27,7 @@ __all__ = [
     "MeetingStatus",
     "Person",
     "SpeakerBinding",
+    "SpeakerIdentityDismissal",
     "Summary",
     "SummaryExample",
     "TranscriptSegment",
